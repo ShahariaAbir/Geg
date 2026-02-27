@@ -26,6 +26,7 @@ interface GameState {
     status: 'idle' | 'connecting' | 'connected' | 'error';
   };
   isPortrait: boolean;
+  isMapFullscreen: boolean;
 }
 
 export default function Game() {
@@ -46,6 +47,7 @@ export default function Game() {
       status: 'idle',
     },
     isPortrait: false,
+    isMapFullscreen: false,
   });
   const [currentZone, setCurrentZone] = useState('Downtown');
 
@@ -65,6 +67,8 @@ export default function Game() {
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const carRef = useRef<THREE.Group | null>(null);
+  const raycasterRef = useRef(new THREE.Raycaster());
+  const groundObjectsRef = useRef<THREE.Object3D[]>([]);
   const buildingsDataRef = useRef<{ pos: THREE.Vector3, scale: THREE.Vector3, color: THREE.Color, type: number }[]>([]);
   const treesDataRef = useRef<{ pos: THREE.Vector3, scale: number }[]>([]);
   const buildingsMeshRef = useRef<THREE.InstancedMesh | null>(null);
@@ -190,6 +194,7 @@ export default function Game() {
     const terrain = new THREE.Mesh(terrainGeom, terrainMat);
     terrain.rotation.x = -Math.PI / 2;
     scene.add(terrain);
+    groundObjectsRef.current.push(terrain);
 
     // --- Water (River) ---
     const waterGeom = new THREE.PlaneGeometry(200, 5000);
@@ -204,6 +209,7 @@ export default function Game() {
     const bridgeDeck = new THREE.Mesh(new THREE.BoxGeometry(200, 2, 40), new THREE.MeshLambertMaterial({ color: 0x555555 }));
     bridgeDeck.position.set(1500, 2, 0);
     bridgeGroup.add(bridgeDeck);
+    groundObjectsRef.current.push(bridgeDeck);
     
     // Bridge Pillars
     const pillarGeom = new THREE.CylinderGeometry(2, 2, 20);
@@ -360,6 +366,7 @@ export default function Game() {
         hRoad.rotation.x = -Math.PI / 2;
         hRoad.position.set(0, 0.02, i * 200);
         scene.add(hRoad);
+        groundObjectsRef.current.push(hRoad);
       }
       
       // Vertical
@@ -367,6 +374,7 @@ export default function Game() {
       vRoad.rotation.x = -Math.PI / 2;
       vRoad.position.set(i * 200, 0.02, 0);
       scene.add(vRoad);
+      groundObjectsRef.current.push(vRoad);
 
       // Road Lines
       const hLine = new THREE.Mesh(new THREE.PlaneGeometry(4000, 0.5), lineMat);
@@ -382,16 +390,18 @@ export default function Game() {
 
     // Mountain Road
     const mountainRoad = new THREE.Mesh(new THREE.BoxGeometry(20, 2, 1000), roadMat);
-    mountainRoad.position.set(-1800, 200, -1800);
+    mountainRoad.position.set(-1800, 300, -1800);
     mountainRoad.rotation.y = Math.PI / 4;
     scene.add(mountainRoad);
+    groundObjectsRef.current.push(mountainRoad);
     
     // Ramp to mountain road (simplified)
-    const ramp = new THREE.Mesh(new THREE.BoxGeometry(20, 2, 500), roadMat);
-    ramp.position.set(-1400, 100, -1400);
+    const ramp = new THREE.Mesh(new THREE.BoxGeometry(20, 2, 800), roadMat);
+    ramp.position.set(-1400, 150, -1400);
     ramp.rotation.y = Math.PI / 4;
-    ramp.rotation.x = Math.PI / 12;
+    ramp.rotation.x = Math.PI / 10;
     scene.add(ramp);
+    groundObjectsRef.current.push(ramp);
   }
 
   function createCar() {
@@ -818,6 +828,17 @@ export default function Game() {
     carRef.current.position.z += Math.cos(rotation) * speed;
     carRef.current.rotation.y = rotation;
 
+    // Terrain Following (Height)
+    raycasterRef.current.set(
+      new THREE.Vector3(carRef.current.position.x, 1000, carRef.current.position.z),
+      new THREE.Vector3(0, -1, 0)
+    );
+    const intersects = raycasterRef.current.intersectObjects(groundObjectsRef.current);
+    if (intersects.length > 0) {
+      const targetY = intersects[0].point.y;
+      carRef.current.position.y = THREE.MathUtils.lerp(carRef.current.position.y, targetY, 0.2);
+    }
+
     // Suspension Tilt (Visual only)
     const carBody = carRef.current.children[0] as THREE.Group;
     if (carBody) {
@@ -919,14 +940,14 @@ export default function Game() {
     const ctx = mapCanvasRef.current.getContext('2d');
     if (!ctx) return;
 
-    const size = 150;
+    const size = gameState.isMapFullscreen ? 600 : 150;
     ctx.clearRect(0, 0, size, size);
     ctx.fillStyle = 'rgba(0,0,0,0.5)';
     ctx.fillRect(0, 0, size, size);
 
     const carX = carRef.current.position.x;
     const carZ = carRef.current.position.z;
-    const scale = 0.1;
+    const scale = gameState.isMapFullscreen ? 0.05 : 0.1; // More zoom out in fullscreen
 
     // Draw Roads
     ctx.strokeStyle = '#444';
@@ -1116,9 +1137,30 @@ export default function Game() {
         
         <div className="flex flex-col items-end gap-3 md:gap-4">
           {/* Mini Map - Top Right for Mobile */}
-          <div className="bg-black/60 backdrop-blur-xl p-1.5 rounded-2xl border border-white/10 overflow-hidden shadow-2xl pointer-events-auto">
-            <canvas ref={mapCanvasRef} width={120} height={120} className="rounded-xl opacity-80 md:w-[150px] md:h-[150px]" />
-            <p className="text-[7px] md:text-[8px] uppercase tracking-[0.3em] text-center mt-1.5 text-white/40 font-bold">Navigation</p>
+          <div 
+            className={`bg-black/60 backdrop-blur-xl p-1.5 rounded-2xl border border-white/10 overflow-hidden shadow-2xl pointer-events-auto transition-all duration-500 ${
+              gameState.isMapFullscreen ? 'fixed inset-4 md:inset-20 z-[60] flex flex-col items-center justify-center' : ''
+            }`}
+          >
+            <div className={`relative ${gameState.isMapFullscreen ? 'w-full h-full flex flex-col items-center justify-center' : ''}`}>
+              <canvas 
+                ref={mapCanvasRef} 
+                width={gameState.isMapFullscreen ? 600 : 120} 
+                height={gameState.isMapFullscreen ? 600 : 120} 
+                className={`rounded-xl opacity-80 transition-all ${
+                  gameState.isMapFullscreen ? 'w-auto h-[80vh] aspect-square' : 'md:w-[150px] md:h-[150px]'
+                }`} 
+              />
+              <button
+                onClick={() => setGameState(prev => ({ ...prev, isMapFullscreen: !prev.isMapFullscreen }))}
+                className="absolute top-2 right-2 p-2 bg-black/40 hover:bg-cyan-400 hover:text-black rounded-lg transition-all"
+              >
+                {gameState.isMapFullscreen ? <RotateCcw size={16} /> : <Smartphone size={16} />}
+              </button>
+            </div>
+            <p className="text-[7px] md:text-[8px] uppercase tracking-[0.3em] text-center mt-1.5 text-white/40 font-bold">
+              {gameState.isMapFullscreen ? 'Full Navigation View' : 'Navigation'}
+            </p>
           </div>
 
           <div className="bg-black/60 backdrop-blur-xl p-4 md:p-6 rounded-3xl border border-white/10 text-right shadow-2xl">
