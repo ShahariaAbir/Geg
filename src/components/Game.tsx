@@ -74,11 +74,14 @@ export default function Game() {
   const barriersMeshRef = useRef<THREE.InstancedMesh | null>(null);
   const windowsMeshRef = useRef<THREE.InstancedMesh | null>(null);
   const cloudsMeshRef = useRef<THREE.InstancedMesh | null>(null);
+  const trafficLightsMeshRef = useRef<THREE.InstancedMesh | null>(null);
+  const busesRef = useRef<THREE.Group[]>([]);
   const propsDataRef = useRef<{ pos: THREE.Vector3, rotation: number }[]>([]);
   const barriersDataRef = useRef<{ pos: THREE.Vector3, rotation: number }[]>([]);
   const windowsDataRef = useRef<{ pos: THREE.Vector3, scale: THREE.Vector3 }[]>([]);
   const cloudsDataRef = useRef<{ pos: THREE.Vector3, scale: THREE.Vector3 }[]>([]);
-  const remotePlayersRef = useRef<{ [id: string]: THREE.Group }>({});
+  const trafficLightsDataRef = useRef<{ pos: THREE.Vector3, rotation: number }[]>([]);
+  const remotePlayersRef = useRef<{ [id: string]: { mesh: THREE.Group, targetPos: THREE.Vector3, targetRot: number, lastUpdate: number } }>({});
   const peerRef = useRef<Peer | null>(null);
   const connRef = useRef<DataConnection | null>(null);
   const frameIdRef = useRef<number | null>(null);
@@ -131,8 +134,8 @@ export default function Game() {
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.8); // Brighter ambient
     scene.add(ambientLight);
 
-    const sunLight = new THREE.DirectionalLight(0xffffff, 1.2);
-    sunLight.position.set(100, 200, 100);
+    const sunLight = new THREE.DirectionalLight(0xffffff, 1.5);
+    sunLight.position.set(100, 300, 100);
     scene.add(sunLight);
 
     // Initialize Peer
@@ -151,12 +154,24 @@ export default function Game() {
       }));
     });
 
-    // --- Ground ---
-    const groundGeom = new THREE.PlaneGeometry(4000, 4000);
-    const groundMat = new THREE.MeshLambertMaterial({ color: 0x2d5a27 }); // Grass green
-    const ground = new THREE.Mesh(groundGeom, groundMat);
-    ground.rotation.x = -Math.PI / 2;
-    scene.add(ground);
+    // --- Terrain ---
+    const terrainGeom = new THREE.PlaneGeometry(5000, 5000, 100, 100);
+    const posAttr = terrainGeom.attributes.position;
+    for (let i = 0; i < posAttr.count; i++) {
+      const x = posAttr.getX(i);
+      const y = posAttr.getY(i);
+      // Create hills outside the city center
+      const dist = Math.sqrt(x * x + y * y);
+      if (dist > 800) {
+        const h = Math.sin(x * 0.01) * Math.cos(y * 0.01) * 60 * ((dist - 800) / 1000);
+        posAttr.setZ(i, h);
+      }
+    }
+    terrainGeom.computeVertexNormals();
+    const terrainMat = new THREE.MeshLambertMaterial({ color: 0x3d7a37 });
+    const terrain = new THREE.Mesh(terrainGeom, terrainMat);
+    terrain.rotation.x = -Math.PI / 2;
+    scene.add(terrain);
 
     // Roads
     createRoads(scene);
@@ -231,31 +246,30 @@ export default function Game() {
 
   function updateRemotePlayer(id: string, payload: any) {
     if (!sceneRef.current) return;
-    let remoteCar = remotePlayersRef.current[id];
-    if (!remoteCar) {
-      remoteCar = createCar();
-      // Change color for remote car
-      const body = remoteCar.children[0].children[0] as THREE.Mesh;
-      (body.material as THREE.MeshStandardMaterial).color.setHex(0x0000cc);
-      sceneRef.current.add(remoteCar);
-      remotePlayersRef.current[id] = remoteCar;
+    let remoteData = remotePlayersRef.current[id];
+    if (!remoteData) {
+      const mesh = createCar();
+      const body = mesh.children[0].children[0] as THREE.Mesh;
+      (body.material as THREE.MeshStandardMaterial).color.setHex(0x00aaff);
+      sceneRef.current.add(mesh);
+      remoteData = {
+        mesh,
+        targetPos: new THREE.Vector3().copy(payload.pos),
+        targetRot: payload.rotation,
+        lastUpdate: Date.now()
+      };
+      remotePlayersRef.current[id] = remoteData;
+    } else {
+      remoteData.targetPos.copy(payload.pos);
+      remoteData.targetRot = payload.rotation;
+      remoteData.lastUpdate = Date.now();
     }
-    remoteCar.position.set(payload.pos.x, payload.pos.y, payload.pos.z);
-    remoteCar.rotation.y = payload.rotation;
-    
-    // Update wheels rotation if needed
-    const speed = payload.speed;
-    remoteCar.children.forEach((child, idx) => {
-      if (child instanceof THREE.Mesh && idx > 0) { // Wheels
-        child.rotation.x += speed * 0.5;
-      }
-    });
   }
 
   function removeRemotePlayer(id: string) {
-    const remoteCar = remotePlayersRef.current[id];
-    if (remoteCar && sceneRef.current) {
-      sceneRef.current.remove(remoteCar);
+    const remoteData = remotePlayersRef.current[id];
+    if (remoteData && sceneRef.current) {
+      sceneRef.current.remove(remoteData.mesh);
       delete remotePlayersRef.current[id];
     }
   }
@@ -368,43 +382,65 @@ export default function Game() {
   function generateCityData() {
     if (buildingsDataRef.current.length > 0) return;
     
-    // Downtown (Center)
-    for (let i = 0; i < 150; i++) {
-      const h = 60 + Math.random() * 120;
-      const w = 20 + Math.random() * 15;
-      const d = 20 + Math.random() * 15;
-      const x = (Math.random() - 0.5) * 600;
-      const z = (Math.random() - 0.5) * 600;
-      addBuilding(x, z, w, h, d, Math.random(), 0);
+    // Downtown (Skyscrapers & Offices)
+    for (let i = 0; i < 80; i++) {
+      const h = 80 + Math.random() * 150;
+      const w = 25 + Math.random() * 15;
+      const d = 25 + Math.random() * 15;
+      const x = (Math.random() - 0.5) * 500;
+      const z = (Math.random() - 0.5) * 500;
+      addBuilding(x, z, w, h, d, 0.5 + Math.random() * 0.1, 0); 
     }
 
-    // Residential (North-East)
-    for (let i = 0; i < 200; i++) {
-      const h = 10 + Math.random() * 15;
-      const w = 15 + Math.random() * 10;
-      const d = 15 + Math.random() * 10;
-      const x = 500 + (Math.random() - 0.5) * 800;
-      const z = 500 + (Math.random() - 0.5) * 800;
-      addBuilding(x, z, w, h, d, 0.1 + Math.random() * 0.1, 1);
+    // Government Offices (Large, formal)
+    for (let i = 0; i < 15; i++) {
+      const x = (Math.random() - 0.5) * 400;
+      const z = (Math.random() - 0.5) * 400;
+      addBuilding(x, z, 60, 40, 60, 0, 7); // Grey/Formal
     }
 
-    // Industrial (South-West)
+    // Residential (Houses)
+    for (let i = 0; i < 300; i++) {
+      const h = 8 + Math.random() * 12;
+      const w = 12 + Math.random() * 8;
+      const d = 12 + Math.random() * 8;
+      const x = 600 + (Math.random() - 0.5) * 1000;
+      const z = 600 + (Math.random() - 0.5) * 1000;
+      addBuilding(x, z, w, h, d, 0.05 + Math.random() * 0.05, 1); 
+    }
+
+    // Commercial (Shops, Malls, Restaurants)
     for (let i = 0; i < 100; i++) {
-      const h = 15 + Math.random() * 20;
-      const w = 40 + Math.random() * 30;
-      const d = 40 + Math.random() * 30;
-      const x = -600 + (Math.random() - 0.5) * 800;
-      const z = -600 + (Math.random() - 0.5) * 800;
-      addBuilding(x, z, w, h, d, 0.6, 2);
+      const h = 10 + Math.random() * 20;
+      const w = 20 + Math.random() * 30;
+      const d = 20 + Math.random() * 30;
+      const x = -700 + (Math.random() - 0.5) * 800;
+      const z = 400 + (Math.random() - 0.5) * 800;
+      addBuilding(x, z, w, h, d, 0.15 + Math.random() * 0.1, 4); 
+    }
+
+    // Healthcare (Hospitals & Clinics)
+    for (let i = 0; i < 10; i++) {
+      const x = -800 + (Math.random() - 0.5) * 600;
+      const z = -800 + (Math.random() - 0.5) * 600;
+      const isClinic = Math.random() > 0.7;
+      addBuilding(x, z, isClinic ? 40 : 100, isClinic ? 15 : 40, isClinic ? 40 : 80, 0, 5); 
+    }
+
+    // Education (Schools & Universities)
+    for (let i = 0; i < 15; i++) {
+      const x = 800 + (Math.random() - 0.5) * 600;
+      const z = -800 + (Math.random() - 0.5) * 600;
+      const isSchool = Math.random() > 0.5;
+      addBuilding(x, z, isSchool ? 60 : 120, isSchool ? 15 : 30, isSchool ? 60 : 120, 0.6, 6); 
     }
 
     // Parking Lots
-    for (let i = 0; i < 15; i++) {
-      const x = (Math.random() - 0.5) * 2000;
-      const z = (Math.random() - 0.5) * 2000;
+    for (let i = 0; i < 20; i++) {
+      const x = (Math.random() - 0.5) * 2500;
+      const z = (Math.random() - 0.5) * 2500;
       addBuilding(x, z, 80, 0.5, 100, 0, 3);
       
-      // Add some barriers around parking lots
       for (let j = 0; j < 4; j++) {
         barriersDataRef.current.push({
           pos: new THREE.Vector3(x + (j % 2 ? 40 : -40), 1, z + (j < 2 ? 50 : -50)),
@@ -441,6 +477,16 @@ export default function Game() {
         scale: new THREE.Vector3(100 + Math.random() * 200, 20 + Math.random() * 40, 100 + Math.random() * 200)
       });
     }
+
+    // Traffic Lights at Intersections
+    for (let i = -5; i <= 5; i++) {
+      for (let j = -5; j <= 5; j++) {
+        const tx = i * 200;
+        const tz = j * 200;
+        trafficLightsDataRef.current.push({ pos: new THREE.Vector3(tx + 12, 0, tz + 12), rotation: 0 });
+        trafficLightsDataRef.current.push({ pos: new THREE.Vector3(tx - 12, 0, tz - 12), rotation: Math.PI });
+      }
+    }
   }
 
   function addBuilding(x: number, z: number, w: number, h: number, d: number, hue: number, type: number) {
@@ -449,25 +495,32 @@ export default function Game() {
     if (Math.abs(x - gridX) < 30) x += 60 * (x > gridX ? 1 : -1);
     if (Math.abs(z - gridZ) < 30) z += 60 * (z > gridZ ? 1 : -1);
     
+    let color = new THREE.Color().setHSL(hue, 0.4, 0.4);
+    if (type === 5) color.setHex(0xffffff); // Hospital/Clinic
+    if (type === 6) color.setHex(0xccaa88); // Education
+    if (type === 4) color.setHex(0xffaa44); // Commercial
+    if (type === 7) color.setHex(0x888899); // Government
+
     buildingsDataRef.current.push({
       pos: new THREE.Vector3(x, h / 2, z),
       scale: new THREE.Vector3(w, h, d),
-      color: new THREE.Color().setHSL(hue, 0.4, 0.4),
+      color: color,
       type: type
     });
 
     // Add windows to tall buildings
-    if (h > 40) {
-      for (let j = 0; j < 10; j++) {
-        const wh = h * 0.8;
-        const wy = h * 0.1 + (j / 10) * wh;
+    if (h > 20) {
+      const rows = Math.floor(h / 4);
+      const cols = Math.floor(w / 4);
+      for (let r = 0; r < rows; r++) {
+        const wy = 2 + r * 4;
         windowsDataRef.current.push({
           pos: new THREE.Vector3(x, wy, z + d / 2 + 0.1),
-          scale: new THREE.Vector3(w * 0.8, 0.5, 0.1)
+          scale: new THREE.Vector3(w * 0.7, 1.5, 0.1)
         });
         windowsDataRef.current.push({
           pos: new THREE.Vector3(x, wy, z - d / 2 - 0.1),
-          scale: new THREE.Vector3(w * 0.8, 0.5, 0.1)
+          scale: new THREE.Vector3(w * 0.7, 1.5, 0.1)
         });
       }
     }
@@ -562,6 +615,70 @@ export default function Game() {
     });
     scene.add(cloudsMesh);
     cloudsMeshRef.current = cloudsMesh;
+
+    // Traffic Lights
+    const poleGeom = new THREE.CylinderGeometry(0.3, 0.3, 10);
+    const poleMat = new THREE.MeshLambertMaterial({ color: 0x333333 });
+    const trafficLightsMesh = new THREE.InstancedMesh(poleGeom, poleMat, trafficLightsDataRef.current.length * 2);
+    
+    const lightBoxGeom = new THREE.BoxGeometry(1, 3, 1);
+    const lightBoxMat = new THREE.MeshLambertMaterial({ color: 0x111111 });
+    const lightBoxesMesh = new THREE.InstancedMesh(lightBoxGeom, lightBoxMat, trafficLightsDataRef.current.length);
+    
+    const redLightGeom = new THREE.SphereGeometry(0.3, 8, 8);
+    const redLightMat = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+    const redLightsMesh = new THREE.InstancedMesh(redLightGeom, redLightMat, trafficLightsDataRef.current.length);
+
+    const greenLightGeom = new THREE.SphereGeometry(0.3, 8, 8);
+    const greenLightMat = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
+    const greenLightsMesh = new THREE.InstancedMesh(greenLightGeom, greenLightMat, trafficLightsDataRef.current.length);
+
+    trafficLightsDataRef.current.forEach((data, i) => {
+      // Pole
+      matrix.makeRotationY(data.rotation);
+      matrix.setPosition(data.pos.x, 5, data.pos.z);
+      trafficLightsMesh.setMatrixAt(i, matrix);
+
+      // Light Box
+      matrix.makeRotationY(data.rotation);
+      matrix.setPosition(data.pos.x, 8, data.pos.z);
+      lightBoxesMesh.setMatrixAt(i, matrix);
+
+      // Red Light
+      matrix.makeRotationY(data.rotation);
+      matrix.setPosition(data.pos.x, 9, data.pos.z + 0.5);
+      redLightsMesh.setMatrixAt(i, matrix);
+
+      // Green Light
+      matrix.makeRotationY(data.rotation);
+      matrix.setPosition(data.pos.x, 7, data.pos.z + 0.5);
+      greenLightsMesh.setMatrixAt(i, matrix);
+    });
+    scene.add(trafficLightsMesh);
+    scene.add(lightBoxesMesh);
+    scene.add(redLightsMesh);
+    scene.add(greenLightsMesh);
+    trafficLightsMeshRef.current = trafficLightsMesh;
+
+    // Add some Buses (Public Transport)
+    for (let i = 0; i < 15; i++) {
+      const bus = new THREE.Group();
+      const busBody = new THREE.Mesh(new THREE.BoxGeometry(4, 4, 12), new THREE.MeshLambertMaterial({ color: 0xffcc00 }));
+      busBody.position.y = 2.5;
+      bus.add(busBody);
+      // Windows for bus
+      const busWin = new THREE.Mesh(new THREE.BoxGeometry(4.1, 1.5, 10), new THREE.MeshLambertMaterial({ color: 0x333333 }));
+      busWin.position.y = 3;
+      bus.add(busWin);
+      
+      bus.position.set((Math.random() - 0.5) * 2000, 0, (Math.random() - 0.5) * 2000);
+      bus.userData = { 
+        speed: 0.2 + Math.random() * 0.3, 
+        dir: Math.random() > 0.5 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 0, 1) 
+      };
+      scene.add(bus);
+      busesRef.current.push(bus);
+    }
   }
 
   function updateCar(delta: number) {
@@ -628,10 +745,26 @@ export default function Game() {
     const px = carRef.current.position.x;
     const pz = carRef.current.position.z;
     let zone = 'Downtown';
-    if (px > 300 && pz > 300) zone = 'Residential';
-    else if (px < -300 && pz < -300) zone = 'Industrial District';
-    else if (Math.abs(px) > 800 || Math.abs(pz) > 800) zone = 'Outskirts';
+    if (px > 400 && pz > 400) zone = 'Residential Area';
+    else if (px < -400 && pz > 200) zone = 'Commercial District';
+    else if (px < -400 && pz < -400) zone = 'Industrial District';
+    else if (px > 400 && pz < -400) zone = 'University Campus';
+    else if (Math.abs(px) > 1200 || Math.abs(pz) > 1200) zone = 'Outskirts';
     if (zone !== currentZone) setCurrentZone(zone);
+
+    // Interpolate Remote Players
+    Object.values(remotePlayersRef.current).forEach((remote: any) => {
+      remote.mesh.position.lerp(remote.targetPos, 0.15);
+      remote.mesh.rotation.y = THREE.MathUtils.lerp(remote.mesh.rotation.y, remote.targetRot, 0.15);
+    });
+
+    // Move Buses
+    busesRef.current.forEach(bus => {
+      bus.position.addScaledVector(bus.userData.dir, bus.userData.speed);
+      if (Math.abs(bus.position.x) > 2500 || Math.abs(bus.position.z) > 2500) {
+        bus.position.set((Math.random() - 0.5) * 2000, 0, (Math.random() - 0.5) * 2000);
+      }
+    });
 
     // Camera follow
     let targetCamPos = new THREE.Vector3();
@@ -723,6 +856,18 @@ export default function Game() {
       if (bx > 0 && bx < size && bz > 0 && bz < size) {
         ctx.fillStyle = b.type === 3 ? '#555' : '#888';
         ctx.fillRect(bx - 2, bz - 2, 4, 4);
+      }
+    });
+
+    // Draw Remote Players
+    Object.values(remotePlayersRef.current).forEach((remote: any) => {
+      const rx = (remote.mesh.position.x - carX) * scale + size / 2;
+      const rz = (remote.mesh.position.z - carZ) * scale + size / 2;
+      if (rx > 0 && rx < size && rz > 0 && rz < size) {
+        ctx.fillStyle = '#00aaff';
+        ctx.beginPath();
+        ctx.arc(rx, rz, 3, 0, Math.PI * 2);
+        ctx.fill();
       }
     });
 
@@ -834,23 +979,23 @@ export default function Game() {
       </AnimatePresence>
 
       {/* HUD */}
-      <div className="absolute top-0 left-0 w-full p-6 flex justify-between items-start z-10 pointer-events-none">
-        <div className="flex flex-col gap-4">
-          <div className="bg-black/60 backdrop-blur-xl p-6 rounded-3xl border border-white/10 flex items-center gap-4 shadow-2xl">
-            <div className="p-3 bg-white/10 rounded-2xl">
-              <Gauge className="text-cyan-400" size={24} />
+      <div className="absolute top-0 left-0 w-full p-4 md:p-6 flex justify-between items-start z-10 pointer-events-none">
+        <div className="flex flex-col gap-3 md:gap-4">
+          <div className="bg-black/60 backdrop-blur-xl p-4 md:p-6 rounded-3xl border border-white/10 flex items-center gap-4 shadow-2xl">
+            <div className="p-2 md:p-3 bg-white/10 rounded-2xl">
+              <Gauge className="text-cyan-400" size={20} />
             </div>
             <div>
-              <p className="text-[10px] uppercase tracking-[0.2em] text-white/40 font-bold mb-1">Velocity</p>
+              <p className="text-[8px] md:text-[10px] uppercase tracking-[0.2em] text-white/40 font-bold mb-1">Velocity</p>
               <div className="flex items-baseline gap-1">
-                <p className="text-4xl font-black tabular-nums tracking-tighter">{gameState.speed}</p>
-                <p className="text-xs font-bold text-cyan-400">KM/H</p>
+                <p className="text-2xl md:text-4xl font-black tabular-nums tracking-tighter">{gameState.speed}</p>
+                <p className="text-[10px] font-bold text-cyan-400">KM/H</p>
               </div>
             </div>
           </div>
 
           {/* Camera Toggle */}
-          <div className="bg-black/60 backdrop-blur-xl p-2 rounded-2xl border border-white/10 flex gap-2 pointer-events-auto">
+          <div className="bg-black/60 backdrop-blur-xl p-1.5 rounded-2xl border border-white/10 flex gap-1.5 pointer-events-auto">
             {(['third', 'first', 'top'] as const).map((mode) => (
               <button
                 key={mode}
@@ -858,7 +1003,7 @@ export default function Game() {
                   gameRunningRef.current.cameraMode = mode;
                   setGameState(prev => ({ ...prev, cameraMode: mode }));
                 }}
-                className={`px-4 py-2 rounded-xl text-[10px] font-bold uppercase tracking-widest transition-all ${
+                className={`px-3 md:px-4 py-1.5 md:py-2 rounded-xl text-[8px] md:text-[10px] font-bold uppercase tracking-widest transition-all ${
                   gameState.cameraMode === mode ? 'bg-cyan-400 text-black' : 'text-white/40 hover:text-white'
                 }`}
               >
@@ -868,24 +1013,24 @@ export default function Game() {
           </div>
 
           {/* Zone Indicator */}
-          <div className="bg-black/60 backdrop-blur-xl px-6 py-3 rounded-2xl border border-white/10 shadow-2xl">
-            <p className="text-[8px] uppercase tracking-[0.3em] text-white/40 font-bold mb-1">Current Location</p>
-            <p className="text-sm font-black tracking-widest text-cyan-400 uppercase">{currentZone}</p>
+          <div className="bg-black/60 backdrop-blur-xl px-4 md:px-6 py-2 md:py-3 rounded-2xl border border-white/10 shadow-2xl">
+            <p className="text-[7px] md:text-[8px] uppercase tracking-[0.3em] text-white/40 font-bold mb-1">Current Location</p>
+            <p className="text-xs md:text-sm font-black tracking-widest text-cyan-400 uppercase">{currentZone}</p>
           </div>
         </div>
         
-        <div className="flex flex-col items-end gap-4">
-          <div className="bg-black/60 backdrop-blur-xl p-6 rounded-3xl border border-white/10 text-right shadow-2xl">
-            <p className="text-[10px] uppercase tracking-[0.2em] text-white/40 font-bold mb-1 flex items-center justify-end gap-2">
-              <Trophy size={12} className="text-yellow-400" /> Record
+        <div className="flex flex-col items-end gap-3 md:gap-4">
+          <div className="bg-black/60 backdrop-blur-xl p-4 md:p-6 rounded-3xl border border-white/10 text-right shadow-2xl">
+            <p className="text-[8px] md:text-[10px] uppercase tracking-[0.2em] text-white/40 font-bold mb-1 flex items-center justify-end gap-2">
+              <Trophy size={10} className="text-yellow-400" /> Record
             </p>
-            <p className="text-2xl font-black tabular-nums tracking-tighter">{gameState.highScore}</p>
+            <p className="text-xl md:text-2xl font-black tabular-nums tracking-tighter">{gameState.highScore}</p>
           </div>
 
           {/* Mini Map */}
-          <div className="bg-black/60 backdrop-blur-xl p-2 rounded-2xl border border-white/10 overflow-hidden shadow-2xl">
-            <canvas ref={mapCanvasRef} width={150} height={150} className="rounded-xl opacity-80" />
-            <p className="text-[8px] uppercase tracking-[0.3em] text-center mt-2 text-white/40 font-bold">Navigation System</p>
+          <div className="bg-black/60 backdrop-blur-xl p-1.5 rounded-2xl border border-white/10 overflow-hidden shadow-2xl pointer-events-auto">
+            <canvas ref={mapCanvasRef} width={120} height={120} className="rounded-xl opacity-80 md:w-[150px] md:h-[150px]" />
+            <p className="text-[7px] md:text-[8px] uppercase tracking-[0.3em] text-center mt-1.5 text-white/40 font-bold">Navigation</p>
           </div>
         </div>
       </div>
