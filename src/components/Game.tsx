@@ -155,23 +155,80 @@ export default function Game() {
     });
 
     // --- Terrain ---
-    const terrainGeom = new THREE.PlaneGeometry(5000, 5000, 100, 100);
+    const terrainGeom = new THREE.PlaneGeometry(5000, 5000, 128, 128);
     const posAttr = terrainGeom.attributes.position;
     for (let i = 0; i < posAttr.count; i++) {
       const x = posAttr.getX(i);
       const y = posAttr.getY(i);
-      // Create hills outside the city center
+      
+      let h = 0;
       const dist = Math.sqrt(x * x + y * y);
-      if (dist > 800) {
-        const h = Math.sin(x * 0.01) * Math.cos(y * 0.01) * 60 * ((dist - 800) / 1000);
-        posAttr.setZ(i, h);
+      
+      // River Bed (South-East)
+      const riverX = 1500;
+      if (Math.abs(x - riverX) < 100) {
+        h = -15 + Math.cos((x - riverX) * 0.03) * 5;
+      } else {
+        // Hills outside city
+        if (dist > 800) {
+          h = Math.sin(x * 0.01) * Math.cos(y * 0.01) * 60 * ((dist - 800) / 1000);
+        }
+        
+        // Mountain (North-West)
+        if (x < -1200 && y < -1200) {
+          const mDist = Math.sqrt((x + 2000) ** 2 + (y + 2000) ** 2);
+          if (mDist < 800) {
+            h += (800 - mDist) * 0.5;
+          }
+        }
       }
+      
+      posAttr.setZ(i, h);
     }
     terrainGeom.computeVertexNormals();
     const terrainMat = new THREE.MeshLambertMaterial({ color: 0x3d7a37 });
     const terrain = new THREE.Mesh(terrainGeom, terrainMat);
     terrain.rotation.x = -Math.PI / 2;
     scene.add(terrain);
+
+    // --- Water (River) ---
+    const waterGeom = new THREE.PlaneGeometry(200, 5000);
+    const waterMat = new THREE.MeshLambertMaterial({ color: 0x0077be, transparent: true, opacity: 0.6 });
+    const water = new THREE.Mesh(waterGeom, waterMat);
+    water.rotation.x = -Math.PI / 2;
+    water.position.set(1500, -5, 0);
+    scene.add(water);
+
+    // --- Bridge ---
+    const bridgeGroup = new THREE.Group();
+    const bridgeDeck = new THREE.Mesh(new THREE.BoxGeometry(200, 2, 40), new THREE.MeshLambertMaterial({ color: 0x555555 }));
+    bridgeDeck.position.set(1500, 2, 0);
+    bridgeGroup.add(bridgeDeck);
+    
+    // Bridge Pillars
+    const pillarGeom = new THREE.CylinderGeometry(2, 2, 20);
+    const pillarMat = new THREE.MeshLambertMaterial({ color: 0x888888 });
+    for (let i = 0; i < 2; i++) {
+      const p = new THREE.Mesh(pillarGeom, pillarMat);
+      p.position.set(1420 + i * 160, -8, 0);
+      bridgeGroup.add(p);
+    }
+    scene.add(bridgeGroup);
+
+    // --- Underground Tunnel ---
+    const tunnelGroup = new THREE.Group();
+    const tunnelCeiling = new THREE.Mesh(new THREE.BoxGeometry(40, 2, 200), new THREE.MeshLambertMaterial({ color: 0x222222 }));
+    tunnelCeiling.position.set(-1500, 10, -1500);
+    tunnelGroup.add(tunnelCeiling);
+    
+    const tunnelWallL = new THREE.Mesh(new THREE.BoxGeometry(2, 10, 200), new THREE.MeshLambertMaterial({ color: 0x222222 }));
+    tunnelWallL.position.set(-1520, 5, -1500);
+    tunnelGroup.add(tunnelWallL);
+    
+    const tunnelWallR = new THREE.Mesh(new THREE.BoxGeometry(2, 10, 200), new THREE.MeshLambertMaterial({ color: 0x222222 }));
+    tunnelWallR.position.set(-1480, 5, -1500);
+    tunnelGroup.add(tunnelWallR);
+    scene.add(tunnelGroup);
 
     // Roads
     createRoads(scene);
@@ -281,10 +338,29 @@ export default function Game() {
     // Main Roads (Grid)
     for (let i = -10; i <= 10; i++) {
       // Horizontal
-      const hRoad = new THREE.Mesh(new THREE.PlaneGeometry(4000, 20), roadMat);
-      hRoad.rotation.x = -Math.PI / 2;
-      hRoad.position.set(0, 0.02, i * 200);
-      scene.add(hRoad);
+      if (i === 0) {
+        // Elevate the road crossing the river
+        const hRoad1 = new THREE.Mesh(new THREE.PlaneGeometry(1400, 20), roadMat);
+        hRoad1.rotation.x = -Math.PI / 2;
+        hRoad1.position.set(-700, 0.02, 0);
+        scene.add(hRoad1);
+        
+        const hRoad2 = new THREE.Mesh(new THREE.PlaneGeometry(2400, 20), roadMat);
+        hRoad2.rotation.x = -Math.PI / 2;
+        hRoad2.position.set(2800, 0.02, 0);
+        scene.add(hRoad2);
+        
+        // Road on bridge
+        const bridgeRoad = new THREE.Mesh(new THREE.PlaneGeometry(200, 20), roadMat);
+        bridgeRoad.rotation.x = -Math.PI / 2;
+        bridgeRoad.position.set(1500, 3.1, 0); // Slightly above bridge deck
+        scene.add(bridgeRoad);
+      } else {
+        const hRoad = new THREE.Mesh(new THREE.PlaneGeometry(4000, 20), roadMat);
+        hRoad.rotation.x = -Math.PI / 2;
+        hRoad.position.set(0, 0.02, i * 200);
+        scene.add(hRoad);
+      }
       
       // Vertical
       const vRoad = new THREE.Mesh(new THREE.PlaneGeometry(20, 4000), roadMat);
@@ -303,6 +379,19 @@ export default function Game() {
       vLine.position.set(i * 200, 0.03, 0);
       scene.add(vLine);
     }
+
+    // Mountain Road
+    const mountainRoad = new THREE.Mesh(new THREE.BoxGeometry(20, 2, 1000), roadMat);
+    mountainRoad.position.set(-1800, 200, -1800);
+    mountainRoad.rotation.y = Math.PI / 4;
+    scene.add(mountainRoad);
+    
+    // Ramp to mountain road (simplified)
+    const ramp = new THREE.Mesh(new THREE.BoxGeometry(20, 2, 500), roadMat);
+    ramp.position.set(-1400, 100, -1400);
+    ramp.rotation.y = Math.PI / 4;
+    ramp.rotation.x = Math.PI / 12;
+    scene.add(ramp);
   }
 
   function createCar() {
@@ -890,7 +979,13 @@ export default function Game() {
       const dz = Math.abs(carPos.z - data.pos.z);
       
       if (dx < data.scale.x / 2 + 1 && dz < data.scale.z / 2 + 1) {
-        gameOver();
+        // Bounce back instead of game over
+        gameRunningRef.current.speed *= -0.5;
+        // Push out slightly
+        const pushX = (carPos.x - data.pos.x) > 0 ? 1 : -1;
+        const pushZ = (carPos.z - data.pos.z) > 0 ? 1 : -1;
+        carRef.current.position.x += pushX * 0.5;
+        carRef.current.position.z += pushZ * 0.5;
         break;
       }
     }
@@ -1020,17 +1115,17 @@ export default function Game() {
         </div>
         
         <div className="flex flex-col items-end gap-3 md:gap-4">
+          {/* Mini Map - Top Right for Mobile */}
+          <div className="bg-black/60 backdrop-blur-xl p-1.5 rounded-2xl border border-white/10 overflow-hidden shadow-2xl pointer-events-auto">
+            <canvas ref={mapCanvasRef} width={120} height={120} className="rounded-xl opacity-80 md:w-[150px] md:h-[150px]" />
+            <p className="text-[7px] md:text-[8px] uppercase tracking-[0.3em] text-center mt-1.5 text-white/40 font-bold">Navigation</p>
+          </div>
+
           <div className="bg-black/60 backdrop-blur-xl p-4 md:p-6 rounded-3xl border border-white/10 text-right shadow-2xl">
             <p className="text-[8px] md:text-[10px] uppercase tracking-[0.2em] text-white/40 font-bold mb-1 flex items-center justify-end gap-2">
               <Trophy size={10} className="text-yellow-400" /> Record
             </p>
             <p className="text-xl md:text-2xl font-black tabular-nums tracking-tighter">{gameState.highScore}</p>
-          </div>
-
-          {/* Mini Map */}
-          <div className="bg-black/60 backdrop-blur-xl p-1.5 rounded-2xl border border-white/10 overflow-hidden shadow-2xl pointer-events-auto">
-            <canvas ref={mapCanvasRef} width={120} height={120} className="rounded-xl opacity-80 md:w-[150px] md:h-[150px]" />
-            <p className="text-[7px] md:text-[8px] uppercase tracking-[0.3em] text-center mt-1.5 text-white/40 font-bold">Navigation</p>
           </div>
         </div>
       </div>
