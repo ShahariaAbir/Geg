@@ -43,8 +43,11 @@ export default function Game() {
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const carRef = useRef<THREE.Group | null>(null);
-  const buildingsDataRef = useRef<{ pos: THREE.Vector3, scale: THREE.Vector3, color: THREE.Color }[]>([]);
+  const buildingsDataRef = useRef<{ pos: THREE.Vector3, scale: THREE.Vector3, color: THREE.Color, type: number }[]>([]);
+  const treesDataRef = useRef<{ pos: THREE.Vector3, scale: number }[]>([]);
   const buildingsMeshRef = useRef<THREE.InstancedMesh | null>(null);
+  const treesMeshRef = useRef<THREE.InstancedMesh | null>(null);
+  const trunkMeshRef = useRef<THREE.InstancedMesh | null>(null);
   const frameIdRef = useRef<number | null>(null);
   const clockRef = useRef(new THREE.Clock());
   const [isLoaded, setIsLoaded] = useState(false);
@@ -91,20 +94,14 @@ export default function Game() {
     scene.add(sunLight);
 
     // --- Ground ---
-    const groundGeom = new THREE.PlaneGeometry(3000, 3000);
-    const groundMat = new THREE.MeshStandardMaterial({ 
-      color: 0x333333,
-      roughness: 0.9,
-      metalness: 0.1
-    });
+    const groundGeom = new THREE.PlaneGeometry(4000, 4000);
+    const groundMat = new THREE.MeshLambertMaterial({ color: 0x2d5a27 }); // Grass green
     const ground = new THREE.Mesh(groundGeom, groundMat);
     ground.rotation.x = -Math.PI / 2;
     scene.add(ground);
 
-    // Road Grid
-    const grid = new THREE.GridHelper(3000, 150, 0xffffff, 0x555555);
-    grid.position.y = 0.01;
-    scene.add(grid);
+    // Roads
+    createRoads(scene);
 
     // --- Car ---
     const car = createCar();
@@ -160,106 +157,88 @@ export default function Game() {
 
   // --- Helper Functions ---
 
+  function createRoads(scene: THREE.Scene) {
+    const roadMat = new THREE.MeshLambertMaterial({ color: 0x333333 });
+    const lineMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    
+    // Main Roads (Grid)
+    for (let i = -10; i <= 10; i++) {
+      // Horizontal
+      const hRoad = new THREE.Mesh(new THREE.PlaneGeometry(4000, 20), roadMat);
+      hRoad.rotation.x = -Math.PI / 2;
+      hRoad.position.set(0, 0.02, i * 200);
+      scene.add(hRoad);
+      
+      // Vertical
+      const vRoad = new THREE.Mesh(new THREE.PlaneGeometry(20, 4000), roadMat);
+      vRoad.rotation.x = -Math.PI / 2;
+      vRoad.position.set(i * 200, 0.02, 0);
+      scene.add(vRoad);
+
+      // Road Lines
+      const hLine = new THREE.Mesh(new THREE.PlaneGeometry(4000, 0.5), lineMat);
+      hLine.rotation.x = -Math.PI / 2;
+      hLine.position.set(0, 0.03, i * 200);
+      scene.add(hLine);
+
+      const vLine = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 4000), lineMat);
+      vLine.rotation.x = -Math.PI / 2;
+      vLine.position.set(i * 200, 0.03, 0);
+      scene.add(vLine);
+    }
+  }
+
   function createCar() {
     const group = new THREE.Group();
-    const carBody = new THREE.Group(); // Sub-group for tilting
+    const carBody = new THREE.Group();
     group.add(carBody);
 
     // Body
     const bodyGeom = new THREE.BoxGeometry(2, 0.6, 4.5);
-    const bodyMat = new THREE.MeshStandardMaterial({ 
-      color: 0xcc0000, 
-      metalness: 0.9, 
-      roughness: 0.1,
-      envMapIntensity: 1
-    });
+    const bodyMat = new THREE.MeshStandardMaterial({ color: 0xcc0000, metalness: 0.8, roughness: 0.2 });
     const body = new THREE.Mesh(bodyGeom, bodyMat);
     body.position.y = 0.6;
     body.castShadow = true;
     carBody.add(body);
 
-    // Cabin (Glassy)
+    // Cabin
     const cabinGeom = new THREE.BoxGeometry(1.7, 0.7, 2.2);
-    const cabinMat = new THREE.MeshStandardMaterial({ 
-      color: 0x111111, 
-      metalness: 1, 
-      roughness: 0,
-      transparent: true,
-      opacity: 0.9
-    });
+    const cabinMat = new THREE.MeshStandardMaterial({ color: 0x111111, transparent: true, opacity: 0.8 });
     const cabin = new THREE.Mesh(cabinGeom, cabinMat);
     cabin.position.set(0, 1.2, -0.1);
-    cabin.castShadow = true;
     carBody.add(cabin);
 
-    // Spoiler
-    const spoilerPostGeom = new THREE.BoxGeometry(0.1, 0.4, 0.1);
-    const spoilerPostL = new THREE.Mesh(spoilerPostGeom, bodyMat);
-    spoilerPostL.position.set(-0.7, 1, -1.8);
-    carBody.add(spoilerPostL);
-    const spoilerPostR = spoilerPostL.clone();
-    spoilerPostR.position.x = 0.7;
-    carBody.add(spoilerPostR);
+    // Side Mirrors
+    const mirrorGeom = new THREE.BoxGeometry(0.4, 0.2, 0.2);
+    const mirrorL = new THREE.Mesh(mirrorGeom, bodyMat);
+    mirrorL.position.set(-1.1, 1, 0.8);
+    carBody.add(mirrorL);
+    const mirrorR = mirrorL.clone();
+    mirrorR.position.x = 1.1;
+    carBody.add(mirrorR);
 
-    const spoilerWingGeom = new THREE.BoxGeometry(2.2, 0.1, 0.6);
-    const spoilerWing = new THREE.Mesh(spoilerWingGeom, bodyMat);
-    spoilerWing.position.set(0, 1.2, -1.8);
-    carBody.add(spoilerWing);
+    // Exhausts
+    const exhaustGeom = new THREE.CylinderGeometry(0.15, 0.15, 0.5, 8);
+    const exhaustMat = new THREE.MeshStandardMaterial({ color: 0x444444, metalness: 1 });
+    const exhaustL = new THREE.Mesh(exhaustGeom, exhaustMat);
+    exhaustL.rotation.x = Math.PI / 2;
+    exhaustL.position.set(-0.6, 0.4, -2.3);
+    carBody.add(exhaustL);
+    const exhaustR = exhaustL.clone();
+    exhaustR.position.x = 0.6;
+    carBody.add(exhaustR);
 
     // Wheels
     const wheelGeom = new THREE.CylinderGeometry(0.45, 0.45, 0.4, 24);
-    const wheelMat = new THREE.MeshStandardMaterial({ color: 0x050505, roughness: 0.9 });
-    const rimGeom = new THREE.CylinderGeometry(0.3, 0.3, 0.41, 12);
-    const rimMat = new THREE.MeshStandardMaterial({ color: 0x888888, metalness: 1, roughness: 0.2 });
-
-    const wheelPositions = [
-      [-1.1, 0.45, 1.4], [1.1, 0.45, 1.4],
-      [-1.1, 0.45, -1.4], [1.1, 0.45, -1.4]
-    ];
+    const wheelMat = new THREE.MeshStandardMaterial({ color: 0x111111 });
+    const wheelPositions = [[-1.1, 0.45, 1.4], [1.1, 0.45, 1.4], [-1.1, 0.45, -1.4], [1.1, 0.45, -1.4]];
 
     wheelPositions.forEach(pos => {
-      const wheelGroup = new THREE.Group();
       const wheel = new THREE.Mesh(wheelGeom, wheelMat);
       wheel.rotation.z = Math.PI / 2;
-      wheelGroup.add(wheel);
-
-      const rim = new THREE.Mesh(rimGeom, rimMat);
-      rim.rotation.z = Math.PI / 2;
-      wheelGroup.add(rim);
-
-      wheelGroup.position.set(pos[0], pos[1], pos[2]);
-      wheelGroup.castShadow = true;
-      group.add(wheelGroup);
+      wheel.position.set(pos[0], pos[1], pos[2]);
+      group.add(wheel);
     });
-
-    // Headlights (Emissive)
-    const lightGeom = new THREE.BoxGeometry(0.5, 0.2, 0.1);
-    const lightMat = new THREE.MeshStandardMaterial({ 
-      color: 0xffffff, 
-      emissive: 0xffffff, 
-      emissiveIntensity: 2 
-    });
-    const lightL = new THREE.Mesh(lightGeom, lightMat);
-    lightL.position.set(-0.65, 0.7, 2.2);
-    carBody.add(lightL);
-
-    const lightR = lightL.clone();
-    lightR.position.x = 0.65;
-    carBody.add(lightR);
-
-    // Tail lights
-    const tailLightMat = new THREE.MeshStandardMaterial({ 
-      color: 0xff0000, 
-      emissive: 0xff0000, 
-      emissiveIntensity: 1 
-    });
-    const tailL = new THREE.Mesh(lightGeom, tailLightMat);
-    tailL.position.set(-0.65, 0.7, -2.2);
-    carBody.add(tailL);
-
-    const tailR = tailL.clone();
-    tailR.position.x = 0.65;
-    carBody.add(tailR);
 
     return group;
   }
@@ -267,64 +246,96 @@ export default function Game() {
   function generateCityData() {
     if (buildingsDataRef.current.length > 0) return;
     
-    for (let i = 0; i < 200; i++) { // Further reduced count for extreme stability
+    // Buildings
+    for (let i = 0; i < 300; i++) {
       const h = 20 + Math.random() * 100;
-      const w = 12 + Math.random() * 20;
-      const d = 12 + Math.random() * 20;
+      const w = 15 + Math.random() * 20;
+      const d = 15 + Math.random() * 20;
       
-      const hue = Math.random(); // Full color spectrum
-      const color = new THREE.Color().setHSL(hue, 0.5, 0.5);
+      const hue = Math.random();
+      const color = new THREE.Color().setHSL(hue, 0.4, 0.4);
       
-      let x = (Math.random() - 0.5) * 1200;
-      let z = (Math.random() - 0.5) * 1200;
+      let x = (Math.random() - 0.5) * 2000;
+      let z = (Math.random() - 0.5) * 2000;
       
-      // Keep roads clear
-      if (Math.abs(x) < 25) x += 50 * (x > 0 ? 1 : -1);
-      if (Math.abs(z) < 25) z += 50 * (z > 0 ? 1 : -1);
+      // Avoid roads
+      const gridX = Math.round(x / 200) * 200;
+      const gridZ = Math.round(z / 200) * 200;
+      if (Math.abs(x - gridX) < 25) x += 50 * (x > gridX ? 1 : -1);
+      if (Math.abs(z - gridZ) < 25) z += 50 * (z > gridZ ? 1 : -1);
       
       buildingsDataRef.current.push({
         pos: new THREE.Vector3(x, h / 2, z),
         scale: new THREE.Vector3(w, h, d),
-        color: color
+        color: color,
+        type: Math.floor(Math.random() * 3)
       });
+    }
+
+    // Trees
+    for (let i = 0; i < 500; i++) {
+      let x = (Math.random() - 0.5) * 2000;
+      let z = (Math.random() - 0.5) * 2000;
+      
+      // Place near roads but not on them
+      const gridX = Math.round(x / 200) * 200;
+      const gridZ = Math.round(z / 200) * 200;
+      const onHRoad = Math.abs(z - gridZ) < 15;
+      const onVRoad = Math.abs(x - gridX) < 15;
+      
+      if (onHRoad || onVRoad) {
+        if (onHRoad) z += 12 * (z > gridZ ? 1 : -1);
+        if (onVRoad) x += 12 * (x > gridX ? 1 : -1);
+        
+        treesDataRef.current.push({
+          pos: new THREE.Vector3(x, 0, z),
+          scale: 0.5 + Math.random() * 1
+        });
+      }
     }
   }
 
   function createCity(scene: THREE.Scene) {
-    const buildingGeom = new THREE.BoxGeometry(1, 1, 1);
-    const buildingMat = new THREE.MeshLambertMaterial({ // Simpler material for performance
-      color: 0xffffff
-    });
-    
-    const count = buildingsDataRef.current.length;
-    const instancedMesh = new THREE.InstancedMesh(buildingGeom, buildingMat, count);
-    
     const matrix = new THREE.Matrix4();
+    
+    // Buildings
+    const buildingGeom = new THREE.BoxGeometry(1, 1, 1);
+    const buildingMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+    const buildingsMesh = new THREE.InstancedMesh(buildingGeom, buildingMat, buildingsDataRef.current.length);
     buildingsDataRef.current.forEach((data, i) => {
       matrix.makeScale(data.scale.x, data.scale.y, data.scale.z);
       matrix.setPosition(data.pos);
-      instancedMesh.setMatrixAt(i, matrix);
-      instancedMesh.setColorAt(i, data.color);
+      buildingsMesh.setMatrixAt(i, matrix);
+      buildingsMesh.setColorAt(i, data.color);
+    });
+    scene.add(buildingsMesh);
+    buildingsMeshRef.current = buildingsMesh;
+
+    // Trees (Foliage)
+    const treeGeom = new THREE.ConeGeometry(2, 4, 8);
+    const treeMat = new THREE.MeshLambertMaterial({ color: 0x2d4c1e });
+    const treesMesh = new THREE.InstancedMesh(treeGeom, treeMat, treesDataRef.current.length);
+    
+    // Trees (Trunks)
+    const trunkGeom = new THREE.CylinderGeometry(0.2, 0.2, 2);
+    const trunkMat = new THREE.MeshLambertMaterial({ color: 0x4b3621 });
+    const trunksMesh = new THREE.InstancedMesh(trunkGeom, trunkMat, treesDataRef.current.length);
+
+    treesDataRef.current.forEach((data, i) => {
+      // Trunk
+      matrix.makeScale(data.scale, data.scale, data.scale);
+      matrix.setPosition(data.pos.x, 1 * data.scale, data.pos.z);
+      trunksMesh.setMatrixAt(i, matrix);
+      
+      // Foliage
+      matrix.makeScale(data.scale, data.scale, data.scale);
+      matrix.setPosition(data.pos.x, 3 * data.scale, data.pos.z);
+      treesMesh.setMatrixAt(i, matrix);
     });
     
-    scene.add(instancedMesh);
-    buildingsMeshRef.current = instancedMesh;
-
-    // Street Lamps - Simplified (No lights, just visuals)
-    const lampGeom = new THREE.CylinderGeometry(0.2, 0.2, 10);
-    const lampMat = new THREE.MeshLambertMaterial({ color: 0x444444 });
-    const lampCount = 40;
-    const lampInstanced = new THREE.InstancedMesh(lampGeom, lampMat, lampCount);
-    
-    for (let i = 0; i < lampCount; i++) {
-      const x = (Math.random() - 0.5) * 800;
-      const z = (Math.random() - 0.5) * 800;
-      const safeX = Math.abs(x) < 15 ? x + 25 : x;
-      
-      matrix.makeTranslation(safeX, 5, z);
-      lampInstanced.setMatrixAt(i, matrix);
-    }
-    scene.add(lampInstanced);
+    scene.add(trunksMesh);
+    scene.add(treesMesh);
+    treesMeshRef.current = treesMesh;
   }
 
   function updateCar(delta: number) {
@@ -376,8 +387,8 @@ export default function Game() {
     setGameState(prev => ({ ...prev, speed: Math.abs(Math.round(speed * 100)) }));
 
     // Camera follow - Smooth Third Person
-    const camDist = 18 + Math.abs(speed) * 8;
-    const camHeight = 8 + Math.abs(speed) * 3;
+    const camDist = THREE.MathUtils.clamp(15 + Math.abs(speed) * 10, 15, 35); // Capped distance
+    const camHeight = THREE.MathUtils.clamp(6 + Math.abs(speed) * 5, 6, 15); // Capped height
     
     // Calculate target position behind the car
     const targetCamPos = new THREE.Vector3(
@@ -387,18 +398,18 @@ export default function Game() {
     );
     
     // Smoothly move camera
-    cameraRef.current.position.lerp(targetCamPos, 0.08);
+    cameraRef.current.position.lerp(targetCamPos, 0.1); // Slightly faster lerp for responsiveness
     
     // Dynamic FOV based on speed
-    const targetFOV = 60 + Math.abs(speed) * 20;
+    const targetFOV = 60 + Math.abs(speed) * 15;
     cameraRef.current.fov = THREE.MathUtils.lerp(cameraRef.current.fov, targetFOV, 0.1);
     cameraRef.current.updateProjectionMatrix();
     
-    // Look slightly ahead of the car for better visibility
-    const lookAheadDist = 10 + speed * 10;
+    // Look slightly ahead of the car
+    const lookAheadDist = 15;
     const lookAtPos = new THREE.Vector3(
       carRef.current.position.x + Math.sin(rotation) * lookAheadDist,
-      carRef.current.position.y + 1,
+      carRef.current.position.y + 2,
       carRef.current.position.z + Math.cos(rotation) * lookAheadDist
     );
     cameraRef.current.lookAt(lookAtPos);
