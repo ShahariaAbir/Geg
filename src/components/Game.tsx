@@ -40,6 +40,7 @@ export default function Game() {
     speed: 0,
     velocity: new THREE.Vector3(),
     rotation: 0,
+    cameraMode: 'third' as 'third' | 'first' | 'top',
   });
 
   // Refs for Three.js objects
@@ -53,15 +54,23 @@ export default function Game() {
   const treesMeshRef = useRef<THREE.InstancedMesh | null>(null);
   const propsMeshRef = useRef<THREE.InstancedMesh | null>(null);
   const trunkMeshRef = useRef<THREE.InstancedMesh | null>(null);
+  const barriersMeshRef = useRef<THREE.InstancedMesh | null>(null);
+  const windowsMeshRef = useRef<THREE.InstancedMesh | null>(null);
+  const cloudsMeshRef = useRef<THREE.InstancedMesh | null>(null);
   const propsDataRef = useRef<{ pos: THREE.Vector3, rotation: number }[]>([]);
+  const barriersDataRef = useRef<{ pos: THREE.Vector3, rotation: number }[]>([]);
+  const windowsDataRef = useRef<{ pos: THREE.Vector3, scale: THREE.Vector3 }[]>([]);
+  const cloudsDataRef = useRef<{ pos: THREE.Vector3, scale: THREE.Vector3 }[]>([]);
   const frameIdRef = useRef<number | null>(null);
   const clockRef = useRef(new THREE.Clock());
   const [isLoaded, setIsLoaded] = useState(false);
 
   // Input state
   const keysRef = useRef<{ [key: string]: boolean }>({});
+  const isMobileRef = useRef(false);
 
   useEffect(() => {
+    isMobileRef.current = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
     if (!containerRef.current) return;
 
     // --- Scene Setup ---
@@ -302,11 +311,18 @@ export default function Game() {
     }
 
     // Parking Lots
-    for (let i = 0; i < 10; i++) {
-      const x = (Math.random() - 0.5) * 1500;
-      const z = (Math.random() - 0.5) * 1500;
-      // Parking lot is just a flat building for collision
-      addBuilding(x, z, 60, 0.5, 80, 0, 3);
+    for (let i = 0; i < 15; i++) {
+      const x = (Math.random() - 0.5) * 2000;
+      const z = (Math.random() - 0.5) * 2000;
+      addBuilding(x, z, 80, 0.5, 100, 0, 3);
+      
+      // Add some barriers around parking lots
+      for (let j = 0; j < 4; j++) {
+        barriersDataRef.current.push({
+          pos: new THREE.Vector3(x + (j % 2 ? 40 : -40), 1, z + (j < 2 ? 50 : -50)),
+          rotation: j < 2 ? 0 : Math.PI / 2
+        });
+      }
     }
 
     // Trees
@@ -329,6 +345,14 @@ export default function Game() {
         }
       }
     }
+
+    // Clouds
+    for (let i = 0; i < 50; i++) {
+      cloudsDataRef.current.push({
+        pos: new THREE.Vector3((Math.random() - 0.5) * 3000, 200 + Math.random() * 100, (Math.random() - 0.5) * 3000),
+        scale: new THREE.Vector3(100 + Math.random() * 200, 20 + Math.random() * 40, 100 + Math.random() * 200)
+      });
+    }
   }
 
   function addBuilding(x: number, z: number, w: number, h: number, d: number, hue: number, type: number) {
@@ -343,6 +367,22 @@ export default function Game() {
       color: new THREE.Color().setHSL(hue, 0.4, 0.4),
       type: type
     });
+
+    // Add windows to tall buildings
+    if (h > 40) {
+      for (let j = 0; j < 10; j++) {
+        const wh = h * 0.8;
+        const wy = h * 0.1 + (j / 10) * wh;
+        windowsDataRef.current.push({
+          pos: new THREE.Vector3(x, wy, z + d / 2 + 0.1),
+          scale: new THREE.Vector3(w * 0.8, 0.5, 0.1)
+        });
+        windowsDataRef.current.push({
+          pos: new THREE.Vector3(x, wy, z - d / 2 - 0.1),
+          scale: new THREE.Vector3(w * 0.8, 0.5, 0.1)
+        });
+      }
+    }
   }
 
   function createCity(scene: THREE.Scene) {
@@ -398,6 +438,42 @@ export default function Game() {
     });
     scene.add(propsMesh);
     propsMeshRef.current = propsMesh;
+
+    // Barriers
+    const barrierGeom = new THREE.BoxGeometry(10, 2, 0.5);
+    const barrierMat = new THREE.MeshLambertMaterial({ color: 0xffaa00 });
+    const barriersMesh = new THREE.InstancedMesh(barrierGeom, barrierMat, barriersDataRef.current.length);
+    barriersDataRef.current.forEach((data, i) => {
+      matrix.makeRotationY(data.rotation);
+      matrix.setPosition(data.pos);
+      barriersMesh.setMatrixAt(i, matrix);
+    });
+    scene.add(barriersMesh);
+    barriersMeshRef.current = barriersMesh;
+
+    // Windows (Glow effect)
+    const windowGeom = new THREE.BoxGeometry(1, 1, 1);
+    const windowMat = new THREE.MeshBasicMaterial({ color: 0xffffaa });
+    const windowsMesh = new THREE.InstancedMesh(windowGeom, windowMat, windowsDataRef.current.length);
+    windowsDataRef.current.forEach((data, i) => {
+      matrix.makeScale(data.scale.x, data.scale.y, data.scale.z);
+      matrix.setPosition(data.pos);
+      windowsMesh.setMatrixAt(i, matrix);
+    });
+    scene.add(windowsMesh);
+    windowsMeshRef.current = windowsMesh;
+
+    // Clouds
+    const cloudGeom = new THREE.SphereGeometry(1, 16, 16);
+    const cloudMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6 });
+    const cloudsMesh = new THREE.InstancedMesh(cloudGeom, cloudMat, cloudsDataRef.current.length);
+    cloudsDataRef.current.forEach((data, i) => {
+      matrix.makeScale(data.scale.x, data.scale.y, data.scale.z);
+      matrix.setPosition(data.pos);
+      cloudsMesh.setMatrixAt(i, matrix);
+    });
+    scene.add(cloudsMesh);
+    cloudsMeshRef.current = cloudsMesh;
   }
 
   function updateCar(delta: number) {
@@ -461,24 +537,25 @@ export default function Game() {
     let targetCamPos = new THREE.Vector3();
     let lookAtPos = new THREE.Vector3();
 
-    if (gameState.cameraMode === 'third') {
-      const camDist = THREE.MathUtils.clamp(15 + Math.abs(speed) * 10, 15, 35);
-      const camHeight = THREE.MathUtils.clamp(6 + Math.abs(speed) * 5, 6, 15);
+    if (gameRunningRef.current.cameraMode === 'third') {
+      const camDist = 20; // Fixed distance
+      const camHeight = 8; // Fixed height
       targetCamPos.set(
         carRef.current.position.x - Math.sin(rotation) * camDist,
         carRef.current.position.y + camHeight,
         carRef.current.position.z - Math.cos(rotation) * camDist
       );
       lookAtPos.set(
-        carRef.current.position.x + Math.sin(rotation) * 15,
-        carRef.current.position.y + 2,
-        carRef.current.position.z + Math.cos(rotation) * 15
+        carRef.current.position.x + Math.sin(rotation) * 10,
+        carRef.current.position.y + 1,
+        carRef.current.position.z + Math.cos(rotation) * 10
       );
-    } else if (gameState.cameraMode === 'first') {
+    } else if (gameRunningRef.current.cameraMode === 'first') {
+      // Positioned inside the cabin
       targetCamPos.set(
-        carRef.current.position.x + Math.sin(rotation) * 0.5,
-        carRef.current.position.y + 1.4,
-        carRef.current.position.z + Math.cos(rotation) * 0.5
+        carRef.current.position.x + Math.sin(rotation) * 0.4,
+        carRef.current.position.y + 1.3,
+        carRef.current.position.z + Math.cos(rotation) * 0.4
       );
       lookAtPos.set(
         carRef.current.position.x + Math.sin(rotation) * 20,
@@ -490,10 +567,12 @@ export default function Game() {
       lookAtPos.copy(carRef.current.position);
     }
     
-    cameraRef.current.position.lerp(targetCamPos, 0.1);
+    // Smoothly move camera
+    const lerpFactor = gameRunningRef.current.cameraMode === 'first' ? 1.0 : 0.1; // Instant in first person
+    cameraRef.current.position.lerp(targetCamPos, lerpFactor);
     
-    // Dynamic FOV
-    const targetFOV = gameState.cameraMode === 'first' ? 80 : 60 + Math.abs(speed) * 15;
+    // Dynamic FOV (Subtle)
+    const targetFOV = gameRunningRef.current.cameraMode === 'first' ? 85 : 60 + Math.abs(speed) * 10;
     cameraRef.current.fov = THREE.MathUtils.lerp(cameraRef.current.fov, targetFOV, 0.1);
     cameraRef.current.updateProjectionMatrix();
     cameraRef.current.lookAt(lookAtPos);
@@ -612,7 +691,10 @@ export default function Game() {
             {(['third', 'first', 'top'] as const).map((mode) => (
               <button
                 key={mode}
-                onClick={() => setGameState(prev => ({ ...prev, cameraMode: mode }))}
+                onClick={() => {
+                  gameRunningRef.current.cameraMode = mode;
+                  setGameState(prev => ({ ...prev, cameraMode: mode }));
+                }}
                 className={`px-4 py-2 rounded-xl text-[10px] font-bold uppercase tracking-widest transition-all ${
                   gameState.cameraMode === mode ? 'bg-cyan-400 text-black' : 'text-white/40 hover:text-white'
                 }`}
@@ -644,6 +726,51 @@ export default function Game() {
           </div>
         </div>
       </div>
+
+      {/* Mobile Controls */}
+      {gameState.isStarted && !gameState.isGameOver && (
+        <div className="absolute inset-0 pointer-events-none z-20 flex flex-col justify-end p-10">
+          <div className="flex justify-between items-end w-full max-w-5xl mx-auto">
+            {/* Steering */}
+            <div className="flex gap-6 pointer-events-auto">
+              <button
+                onTouchStart={() => (keysRef.current['ArrowLeft'] = true)}
+                onTouchEnd={() => (keysRef.current['ArrowLeft'] = false)}
+                className="w-24 h-24 bg-black/40 backdrop-blur-xl rounded-full border-2 border-white/20 flex items-center justify-center active:bg-cyan-500 active:scale-95 transition-all shadow-2xl"
+              >
+                <ArrowLeft size={40} className="text-white" />
+              </button>
+              <button
+                onTouchStart={() => (keysRef.current['ArrowRight'] = true)}
+                onTouchEnd={() => (keysRef.current['ArrowRight'] = false)}
+                className="w-24 h-24 bg-black/40 backdrop-blur-xl rounded-full border-2 border-white/20 flex items-center justify-center active:bg-cyan-500 active:scale-95 transition-all shadow-2xl"
+              >
+                <ArrowRight size={40} className="text-white" />
+              </button>
+            </div>
+
+            {/* Pedals */}
+            <div className="flex gap-8 pointer-events-auto items-end">
+              <button
+                onTouchStart={() => (keysRef.current['ArrowDown'] = true)}
+                onTouchEnd={() => (keysRef.current['ArrowDown'] = false)}
+                className="w-24 h-24 bg-red-600/40 backdrop-blur-xl rounded-2xl border-2 border-red-500/30 flex flex-col items-center justify-center active:bg-red-600 active:scale-95 transition-all shadow-2xl"
+              >
+                <ArrowDown size={32} />
+                <span className="text-[10px] font-black mt-1">BRAKE</span>
+              </button>
+              <button
+                onTouchStart={() => (keysRef.current['ArrowUp'] = true)}
+                onTouchEnd={() => (keysRef.current['ArrowUp'] = false)}
+                className="w-28 h-44 bg-cyan-600/40 backdrop-blur-xl rounded-3xl border-2 border-cyan-500/30 flex flex-col items-center justify-center active:bg-cyan-500 active:scale-95 transition-all shadow-2xl"
+              >
+                <ArrowUp size={48} />
+                <span className="text-xs font-black mt-2">GAS</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Loading Screen */}
       <AnimatePresence>
