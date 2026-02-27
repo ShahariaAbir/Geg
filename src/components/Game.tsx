@@ -570,13 +570,25 @@ export default function Game() {
     const keys = keysRef.current;
     let { speed, rotation } = gameRunningRef.current;
 
-    // Acceleration
+    // Acceleration & Braking
+    let acceleration = 0;
     if (keys['ArrowUp'] || keys['KeyW']) {
-      speed += CAR_ACCELERATION * delta;
-    } else if (keys['ArrowDown'] || keys['KeyS']) {
-      speed -= CAR_BRAKE * delta;
+      acceleration += CAR_ACCELERATION;
+    }
+    if (keys['ArrowDown'] || keys['KeyS']) {
+      // If moving forward, brake harder. If stopped or reversing, accelerate backward.
+      if (speed > 0.05) {
+        acceleration -= CAR_BRAKE * 2;
+      } else {
+        acceleration -= CAR_ACCELERATION;
+      }
+    }
+
+    if (acceleration !== 0) {
+      speed += acceleration * delta;
     } else {
       speed *= CAR_FRICTION;
+      if (Math.abs(speed) < 0.005) speed = 0;
     }
 
     // Steering
@@ -885,16 +897,18 @@ export default function Game() {
             {/* Steering */}
             <div className="flex gap-6 pointer-events-auto">
               <button
-                onTouchStart={() => (keysRef.current['ArrowLeft'] = true)}
-                onTouchEnd={() => (keysRef.current['ArrowLeft'] = false)}
-                className="w-24 h-24 bg-black/40 backdrop-blur-xl rounded-full border-2 border-white/20 flex items-center justify-center active:bg-cyan-500 active:scale-95 transition-all shadow-2xl"
+                onTouchStart={(e) => { e.preventDefault(); keysRef.current['ArrowLeft'] = true; }}
+                onTouchEnd={(e) => { e.preventDefault(); keysRef.current['ArrowLeft'] = false; }}
+                onPointerLeave={() => (keysRef.current['ArrowLeft'] = false)}
+                className="w-24 h-24 bg-black/40 backdrop-blur-xl rounded-full border-2 border-white/20 flex items-center justify-center active:bg-cyan-500 active:scale-95 transition-all shadow-2xl touch-none"
               >
                 <ArrowLeft size={40} className="text-white" />
               </button>
               <button
-                onTouchStart={() => (keysRef.current['ArrowRight'] = true)}
-                onTouchEnd={() => (keysRef.current['ArrowRight'] = false)}
-                className="w-24 h-24 bg-black/40 backdrop-blur-xl rounded-full border-2 border-white/20 flex items-center justify-center active:bg-cyan-500 active:scale-95 transition-all shadow-2xl"
+                onTouchStart={(e) => { e.preventDefault(); keysRef.current['ArrowRight'] = true; }}
+                onTouchEnd={(e) => { e.preventDefault(); keysRef.current['ArrowRight'] = false; }}
+                onPointerLeave={() => (keysRef.current['ArrowRight'] = false)}
+                className="w-24 h-24 bg-black/40 backdrop-blur-xl rounded-full border-2 border-white/20 flex items-center justify-center active:bg-cyan-500 active:scale-95 transition-all shadow-2xl touch-none"
               >
                 <ArrowRight size={40} className="text-white" />
               </button>
@@ -903,17 +917,19 @@ export default function Game() {
             {/* Pedals */}
             <div className="flex gap-8 pointer-events-auto items-end">
               <button
-                onTouchStart={() => (keysRef.current['ArrowDown'] = true)}
-                onTouchEnd={() => (keysRef.current['ArrowDown'] = false)}
-                className="w-24 h-24 bg-red-600/40 backdrop-blur-xl rounded-2xl border-2 border-red-500/30 flex flex-col items-center justify-center active:bg-red-600 active:scale-95 transition-all shadow-2xl"
+                onTouchStart={(e) => { e.preventDefault(); keysRef.current['ArrowDown'] = true; }}
+                onTouchEnd={(e) => { e.preventDefault(); keysRef.current['ArrowDown'] = false; }}
+                onPointerLeave={() => (keysRef.current['ArrowDown'] = false)}
+                className="w-24 h-24 bg-red-600/40 backdrop-blur-xl rounded-2xl border-2 border-red-500/30 flex flex-col items-center justify-center active:bg-red-600 active:scale-95 transition-all shadow-2xl touch-none"
               >
                 <ArrowDown size={32} />
                 <span className="text-[10px] font-black mt-1">BRAKE</span>
               </button>
               <button
-                onTouchStart={() => (keysRef.current['ArrowUp'] = true)}
-                onTouchEnd={() => (keysRef.current['ArrowUp'] = false)}
-                className="w-28 h-44 bg-cyan-600/40 backdrop-blur-xl rounded-3xl border-2 border-cyan-500/30 flex flex-col items-center justify-center active:bg-cyan-500 active:scale-95 transition-all shadow-2xl"
+                onTouchStart={(e) => { e.preventDefault(); keysRef.current['ArrowUp'] = true; }}
+                onTouchEnd={(e) => { e.preventDefault(); keysRef.current['ArrowUp'] = false; }}
+                onPointerLeave={() => (keysRef.current['ArrowUp'] = false)}
+                className="w-28 h-44 bg-cyan-600/40 backdrop-blur-xl rounded-3xl border-2 border-cyan-500/30 flex flex-col items-center justify-center active:bg-cyan-500 active:scale-95 transition-all shadow-2xl touch-none"
               >
                 <ArrowUp size={48} />
                 <span className="text-xs font-black mt-2">GAS</span>
