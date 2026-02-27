@@ -1,5 +1,5 @@
 {
-  "name": "Urban Drive 3D",
-  "description": "A realistic 3D driving simulator featuring a detailed urban environment and physics-based car controls.",
+  "name": "Urban Drive Multiplayer",
+  "description": "A high-performance 3D multiplayer driving simulator with P2P WebRTC synchronization and realistic city exploration.",
   "requestFramePermissions": []
 }

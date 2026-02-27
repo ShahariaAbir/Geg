@@ -1,0 +1,18 @@
+{
+  "name": "Urban Drive Multiplayer",
+  "short_name": "UrbanDrive",
+  "description": "Realistic 3D Multiplayer Driving Simulator",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "landscape",
+  "background_color": "#000000",
+  "theme_color": "#000000",
+  "icons": [
+    {
+      "src": "https://ciuufyblgorvzqtdzevx.supabase.co/storage/v1/object/public/images/0.008808135582519805-IMG_20260209_170808.jpg",
+      "sizes": "512x512",
+      "type": "image/jpeg",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { motion, AnimatePresence } from 'motion/react';
-import { Trophy, Play, RotateCcw, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Gauge } from 'lucide-react';
+import { Trophy, Play, RotateCcw, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Gauge, Users, Copy, Check, Smartphone } from 'lucide-react';
+import Peer, { DataConnection } from 'peerjs';
 
 // --- Constants ---
 const CAR_ACCELERATION = 0.5;
@@ -17,6 +18,14 @@ interface GameState {
   highScore: number;
   speed: number;
   cameraMode: 'third' | 'first' | 'top';
+  multiplayer: {
+    peerId: string;
+    targetPeerId: string;
+    isConnected: boolean;
+    isHost: boolean;
+    status: 'idle' | 'connecting' | 'connected' | 'error';
+  };
+  isPortrait: boolean;
 }
 
 export default function Game() {
@@ -29,6 +38,14 @@ export default function Game() {
     highScore: parseInt(localStorage.getItem('urban_drive_highscore') || '0'),
     speed: 0,
     cameraMode: 'third',
+    multiplayer: {
+      peerId: '',
+      targetPeerId: '',
+      isConnected: false,
+      isHost: false,
+      status: 'idle',
+    },
+    isPortrait: false,
   });
   const [currentZone, setCurrentZone] = useState('Downtown');
 
@@ -61,6 +78,9 @@ export default function Game() {
   const barriersDataRef = useRef<{ pos: THREE.Vector3, rotation: number }[]>([]);
   const windowsDataRef = useRef<{ pos: THREE.Vector3, scale: THREE.Vector3 }[]>([]);
   const cloudsDataRef = useRef<{ pos: THREE.Vector3, scale: THREE.Vector3 }[]>([]);
+  const remotePlayersRef = useRef<{ [id: string]: THREE.Group }>({});
+  const peerRef = useRef<Peer | null>(null);
+  const connRef = useRef<DataConnection | null>(null);
   const frameIdRef = useRef<number | null>(null);
   const clockRef = useRef(new THREE.Clock());
   const [isLoaded, setIsLoaded] = useState(false);
@@ -71,6 +91,13 @@ export default function Game() {
 
   useEffect(() => {
     isMobileRef.current = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    
+    const checkOrientation = () => {
+      setGameState(prev => ({ ...prev, isPortrait: window.innerHeight > window.innerWidth }));
+    };
+    window.addEventListener('resize', checkOrientation);
+    checkOrientation();
+
     if (!containerRef.current) return;
 
     // --- Scene Setup ---
@@ -107,6 +134,22 @@ export default function Game() {
     const sunLight = new THREE.DirectionalLight(0xffffff, 1.2);
     sunLight.position.set(100, 200, 100);
     scene.add(sunLight);
+
+    // Initialize Peer
+    const peer = new Peer();
+    peerRef.current = peer;
+    peer.on('open', (id) => {
+      setGameState(prev => ({ ...prev, multiplayer: { ...prev.multiplayer, peerId: id } }));
+    });
+
+    peer.on('connection', (conn) => {
+      connRef.current = conn;
+      setupConnection(conn);
+      setGameState(prev => ({ 
+        ...prev, 
+        multiplayer: { ...prev.multiplayer, isConnected: true, isHost: true, status: 'connected' } 
+      }));
+    });
 
     // --- Ground ---
     const groundGeom = new THREE.PlaneGeometry(4000, 4000);
@@ -159,9 +202,11 @@ export default function Game() {
     animate();
 
     return () => {
+      window.removeEventListener('resize', checkOrientation);
       window.removeEventListener('resize', handleResize);
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
+      if (peerRef.current) peerRef.current.destroy();
       if (frameIdRef.current) cancelAnimationFrame(frameIdRef.current);
       if (containerRef.current && canvas) {
         containerRef.current.removeChild(canvas);
@@ -171,6 +216,49 @@ export default function Game() {
   }, []);
 
   // --- Helper Functions ---
+
+  function setupConnection(conn: DataConnection) {
+    conn.on('data', (data: any) => {
+      if (data.type === 'update') {
+        updateRemotePlayer(conn.peer, data.payload);
+      }
+    });
+    conn.on('close', () => {
+      removeRemotePlayer(conn.peer);
+      setGameState(prev => ({ ...prev, multiplayer: { ...prev.multiplayer, isConnected: false, status: 'idle' } }));
+    });
+  }
+
+  function updateRemotePlayer(id: string, payload: any) {
+    if (!sceneRef.current) return;
+    let remoteCar = remotePlayersRef.current[id];
+    if (!remoteCar) {
+      remoteCar = createCar();
+      // Change color for remote car
+      const body = remoteCar.children[0].children[0] as THREE.Mesh;
+      (body.material as THREE.MeshStandardMaterial).color.setHex(0x0000cc);
+      sceneRef.current.add(remoteCar);
+      remotePlayersRef.current[id] = remoteCar;
+    }
+    remoteCar.position.set(payload.pos.x, payload.pos.y, payload.pos.z);
+    remoteCar.rotation.y = payload.rotation;
+    
+    // Update wheels rotation if needed
+    const speed = payload.speed;
+    remoteCar.children.forEach((child, idx) => {
+      if (child instanceof THREE.Mesh && idx > 0) { // Wheels
+        child.rotation.x += speed * 0.5;
+      }
+    });
+  }
+
+  function removeRemotePlayer(id: string) {
+    const remoteCar = remotePlayersRef.current[id];
+    if (remoteCar && sceneRef.current) {
+      sceneRef.current.remove(remoteCar);
+      delete remotePlayersRef.current[id];
+    }
+  }
 
   function createRoads(scene: THREE.Scene) {
     const roadMat = new THREE.MeshLambertMaterial({ color: 0x333333 });
@@ -578,6 +666,18 @@ export default function Game() {
     cameraRef.current.lookAt(lookAtPos);
 
     updateMiniMap();
+
+    // Send data to peer
+    if (connRef.current && connRef.current.open) {
+      connRef.current.send({
+        type: 'update',
+        payload: {
+          pos: carRef.current.position,
+          rotation: rotation,
+          speed: speed
+        }
+      });
+    }
   }
 
   function updateMiniMap() {
@@ -649,6 +749,24 @@ export default function Game() {
     });
   }
 
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+
+  useEffect(() => {
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+    });
+  }, []);
+
+  const installApp = async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === 'accepted') {
+      setDeferredPrompt(null);
+    }
+  };
+
   const startGame = () => {
     gameRunningRef.current = {
       isStarted: true,
@@ -666,9 +784,42 @@ export default function Game() {
     clockRef.current.start();
   };
 
+  const connectToPeer = () => {
+    if (!peerRef.current || !gameState.multiplayer.targetPeerId) return;
+    setGameState(prev => ({ ...prev, multiplayer: { ...prev.multiplayer, status: 'connecting' } }));
+    const conn = peerRef.current.connect(gameState.multiplayer.targetPeerId);
+    connRef.current = conn;
+    conn.on('open', () => {
+      setupConnection(conn);
+      setGameState(prev => ({ 
+        ...prev, 
+        multiplayer: { ...prev.multiplayer, isConnected: true, isHost: false, status: 'connected' } 
+      }));
+    });
+    conn.on('error', () => {
+      setGameState(prev => ({ ...prev, multiplayer: { ...prev.multiplayer, status: 'error' } }));
+    });
+  };
+
   return (
     <div className="relative w-full h-full font-sans text-white overflow-hidden bg-black">
       <div ref={containerRef} className="absolute inset-0 z-0" />
+
+      {/* Landscape Warning */}
+      <AnimatePresence>
+        {gameState.isPortrait && isMobileRef.current && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 z-[100] bg-black flex flex-col items-center justify-center p-10 text-center"
+          >
+            <Smartphone size={64} className="text-cyan-400 mb-6 animate-bounce" />
+            <h2 className="text-3xl font-black mb-4">LANDSCAPE MODE REQUIRED</h2>
+            <p className="text-white/60">Please rotate your device for the best driving experience.</p>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* HUD */}
       <div className="absolute top-0 left-0 w-full p-6 flex justify-between items-start z-10 pointer-events-none">
@@ -805,23 +956,92 @@ export default function Game() {
             <motion.div
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
-              className="text-center"
+              className="text-center flex flex-col items-center"
             >
+              <img 
+                src="https://ciuufyblgorvzqtdzevx.supabase.co/storage/v1/object/public/images/0.008808135582519805-IMG_20260209_170808.jpg" 
+                alt="Urban Drive Logo" 
+                className="w-32 h-32 rounded-3xl mb-6 shadow-2xl border-2 border-white/20 object-cover"
+                referrerPolicy="no-referrer"
+              />
               <h1 className="text-8xl font-black italic tracking-tighter mb-2 text-transparent bg-clip-text bg-gradient-to-b from-white to-white/20">
                 URBAN DRIVE
               </h1>
-              <p className="text-cyan-400 tracking-[0.5em] uppercase text-xs font-bold mb-16">Realistic City Simulator</p>
+              <p className="text-cyan-400 tracking-[0.5em] uppercase text-xs font-bold mb-8">Realistic City Simulator</p>
               
-              <button
-                onClick={startGame}
-                className="group relative px-16 py-8 bg-white text-black rounded-full font-black text-2xl transition-all hover:scale-105 active:scale-95 shadow-[0_0_50px_rgba(255,255,255,0.3)]"
-              >
-                <div className="flex items-center gap-4">
-                  <Play fill="currentColor" size={24} />
-                  IGNITION
+              <div className="flex flex-col items-center gap-6 mb-12">
+                <button
+                  onClick={startGame}
+                  className="group relative px-16 py-6 bg-white text-black rounded-full font-black text-2xl transition-all hover:scale-105 active:scale-95 shadow-[0_0_50px_rgba(255,255,255,0.3)]"
+                >
+                  <div className="flex items-center gap-4">
+                    <Play fill="currentColor" size={24} />
+                    IGNITION
+                  </div>
+                  <div className="absolute -inset-2 bg-white/20 blur-2xl rounded-full opacity-0 group-hover:opacity-100 transition-opacity" />
+                </button>
+
+                {/* Multiplayer Controls */}
+                <div className="bg-black/40 backdrop-blur-xl p-6 rounded-[2rem] border border-white/10 w-full max-w-md">
+                  <div className="flex items-center gap-3 mb-4 text-cyan-400">
+                    <Users size={20} />
+                    <span className="text-xs font-black uppercase tracking-widest">Multiplayer Lobby</span>
+                  </div>
+                  
+                  {gameState.multiplayer.peerId ? (
+                    <div className="flex flex-col gap-4">
+                      <div className="flex items-center justify-between bg-white/5 p-3 rounded-xl border border-white/5">
+                        <div className="text-left">
+                          <p className="text-[8px] uppercase text-white/40 font-bold mb-1">Your Room Code</p>
+                          <p className="text-sm font-mono font-bold text-white tracking-wider">{gameState.multiplayer.peerId}</p>
+                        </div>
+                        <button 
+                          onClick={() => {
+                            navigator.clipboard.writeText(gameState.multiplayer.peerId);
+                          }}
+                          className="p-2 hover:bg-white/10 rounded-lg transition-colors text-cyan-400"
+                        >
+                          <Copy size={16} />
+                        </button>
+                      </div>
+
+                      <div className="h-px bg-white/10" />
+
+                      <div className="flex gap-2">
+                        <input 
+                          type="text"
+                          placeholder="Enter Friend's Code"
+                          value={gameState.multiplayer.targetPeerId}
+                          onChange={(e) => setGameState(prev => ({ ...prev, multiplayer: { ...prev.multiplayer, targetPeerId: e.target.value } }))}
+                          className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-2 text-sm font-bold focus:outline-none focus:border-cyan-400 transition-colors"
+                        />
+                        <button
+                          onClick={connectToPeer}
+                          disabled={gameState.multiplayer.status === 'connecting' || gameState.multiplayer.isConnected}
+                          className={`px-6 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${
+                            gameState.multiplayer.isConnected 
+                              ? 'bg-green-500 text-white' 
+                              : 'bg-cyan-400 text-black hover:scale-105 active:scale-95'
+                          }`}
+                        >
+                          {gameState.multiplayer.status === 'connecting' ? '...' : gameState.multiplayer.isConnected ? 'Connected' : 'Join'}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-white/40 font-bold italic">Initializing P2P Network...</p>
+                  )}
                 </div>
-                <div className="absolute -inset-2 bg-white/20 blur-2xl rounded-full opacity-0 group-hover:opacity-100 transition-opacity" />
-              </button>
+              </div>
+
+              {deferredPrompt && (
+                <button
+                  onClick={installApp}
+                  className="mb-8 px-8 py-3 bg-cyan-400/20 border border-cyan-400/40 text-cyan-400 rounded-2xl text-[10px] font-black uppercase tracking-[0.3em] hover:bg-cyan-400 hover:text-black transition-all pointer-events-auto"
+                >
+                  Install Urban Drive App
+                </button>
+              )}
 
               <div className="mt-20 flex gap-12 justify-center text-[10px] font-bold tracking-[0.2em] text-white/30 uppercase">
                 <div className="flex flex-col gap-2">
