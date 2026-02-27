@@ -57,57 +57,52 @@ export default function Game() {
 
     // --- Scene Setup ---
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x111111); // Night city
-    scene.fog = new THREE.FogExp2(0x111111, 0.02);
+    scene.background = new THREE.Color(0x87ceeb); // Sky blue
+    scene.fog = new THREE.FogExp2(0x87ceeb, 0.002);
     sceneRef.current = scene;
 
     const camera = new THREE.PerspectiveCamera(
-      75,
+      60, // Lower FOV for better sense of scale
       window.innerWidth / window.innerHeight,
       0.1,
-      2000
+      3000
     );
-    camera.position.set(0, 5, 15);
+    camera.position.set(0, 10, 30);
     cameraRef.current = camera;
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+    const renderer = new THREE.WebGLRenderer({ 
+      antialias: true, 
+      powerPreference: "high-performance",
+      precision: "mediump" // Lower precision for performance
+    });
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5)); // Lower pixel ratio for performance
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.BasicShadowMap; // Faster shadow map
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.2)); // Even lower for stability
+    renderer.shadowMap.enabled = false; // DISABLE SHADOWS FOR PERFORMANCE
     const canvas = renderer.domElement;
     containerRef.current.appendChild(canvas);
     rendererRef.current = renderer;
 
     // --- Lighting ---
-    const ambientLight = new THREE.AmbientLight(0x202020, 0.5);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.8); // Brighter ambient
     scene.add(ambientLight);
 
-    const sunLight = new THREE.DirectionalLight(0xffffff, 0.8);
-    sunLight.position.set(50, 100, 50);
-    sunLight.castShadow = true;
-    sunLight.shadow.mapSize.width = 512; // Smaller shadow map
-    sunLight.shadow.mapSize.height = 512;
-    sunLight.shadow.camera.left = -150;
-    sunLight.shadow.camera.right = 150;
-    sunLight.shadow.camera.top = 150;
-    sunLight.shadow.camera.bottom = -150;
+    const sunLight = new THREE.DirectionalLight(0xffffff, 1.2);
+    sunLight.position.set(100, 200, 100);
     scene.add(sunLight);
 
     // --- Ground ---
-    const groundGeom = new THREE.PlaneGeometry(2000, 2000);
+    const groundGeom = new THREE.PlaneGeometry(3000, 3000);
     const groundMat = new THREE.MeshStandardMaterial({ 
-      color: 0x222222,
-      roughness: 0.8,
-      metalness: 0.2
+      color: 0x333333,
+      roughness: 0.9,
+      metalness: 0.1
     });
     const ground = new THREE.Mesh(groundGeom, groundMat);
     ground.rotation.x = -Math.PI / 2;
-    ground.receiveShadow = true;
     scene.add(ground);
 
     // Road Grid
-    const grid = new THREE.GridHelper(2000, 100, 0x00ffff, 0x444444);
+    const grid = new THREE.GridHelper(3000, 150, 0xffffff, 0x555555);
     grid.position.y = 0.01;
     scene.add(grid);
 
@@ -272,20 +267,20 @@ export default function Game() {
   function generateCityData() {
     if (buildingsDataRef.current.length > 0) return;
     
-    for (let i = 0; i < 400; i++) {
-      const h = 15 + Math.random() * 60;
-      const w = 8 + Math.random() * 12;
-      const d = 8 + Math.random() * 12;
+    for (let i = 0; i < 200; i++) { // Further reduced count for extreme stability
+      const h = 20 + Math.random() * 100;
+      const w = 12 + Math.random() * 20;
+      const d = 12 + Math.random() * 20;
       
-      const hue = Math.random() * 0.1 + 0.6;
-      const color = new THREE.Color().setHSL(hue, 0.1, 0.15);
+      const hue = Math.random(); // Full color spectrum
+      const color = new THREE.Color().setHSL(hue, 0.5, 0.5);
       
-      let x = (Math.random() - 0.5) * 800;
-      let z = (Math.random() - 0.5) * 800;
+      let x = (Math.random() - 0.5) * 1200;
+      let z = (Math.random() - 0.5) * 1200;
       
-      if (Math.abs(x) < 20 || Math.abs(z) < 20) {
-        x += 40;
-      }
+      // Keep roads clear
+      if (Math.abs(x) < 25) x += 50 * (x > 0 ? 1 : -1);
+      if (Math.abs(z) < 25) z += 50 * (z > 0 ? 1 : -1);
       
       buildingsDataRef.current.push({
         pos: new THREE.Vector3(x, h / 2, z),
@@ -297,15 +292,12 @@ export default function Game() {
 
   function createCity(scene: THREE.Scene) {
     const buildingGeom = new THREE.BoxGeometry(1, 1, 1);
-    const buildingMat = new THREE.MeshStandardMaterial({ 
-      roughness: 0.6,
-      metalness: 0.4
+    const buildingMat = new THREE.MeshLambertMaterial({ // Simpler material for performance
+      color: 0xffffff
     });
     
     const count = buildingsDataRef.current.length;
     const instancedMesh = new THREE.InstancedMesh(buildingGeom, buildingMat, count);
-    instancedMesh.castShadow = true;
-    instancedMesh.receiveShadow = true;
     
     const matrix = new THREE.Matrix4();
     buildingsDataRef.current.forEach((data, i) => {
@@ -318,26 +310,19 @@ export default function Game() {
     scene.add(instancedMesh);
     buildingsMeshRef.current = instancedMesh;
 
-    // Street Lamps - Optimized (Fewer lights)
-    const lampGeom = new THREE.CylinderGeometry(0.1, 0.1, 8);
-    const lampMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
-    const lampCount = 30;
+    // Street Lamps - Simplified (No lights, just visuals)
+    const lampGeom = new THREE.CylinderGeometry(0.2, 0.2, 10);
+    const lampMat = new THREE.MeshLambertMaterial({ color: 0x444444 });
+    const lampCount = 40;
     const lampInstanced = new THREE.InstancedMesh(lampGeom, lampMat, lampCount);
     
     for (let i = 0; i < lampCount; i++) {
-      const x = (Math.random() - 0.5) * 600;
-      const z = (Math.random() - 0.5) * 600;
-      const safeX = Math.abs(x) < 10 ? x + 15 : x;
+      const x = (Math.random() - 0.5) * 800;
+      const z = (Math.random() - 0.5) * 800;
+      const safeX = Math.abs(x) < 15 ? x + 25 : x;
       
-      matrix.makeTranslation(safeX, 4, z);
+      matrix.makeTranslation(safeX, 5, z);
       lampInstanced.setMatrixAt(i, matrix);
-      
-      // Only add point lights for the first 8 lamps to save performance
-      if (i < 8) {
-        const lampLight = new THREE.PointLight(0xffccaa, 15, 40);
-        lampLight.position.set(safeX, 8, z);
-        scene.add(lampLight);
-      }
     }
     scene.add(lampInstanced);
   }
@@ -390,16 +375,33 @@ export default function Game() {
     gameRunningRef.current.rotation = rotation;
     setGameState(prev => ({ ...prev, speed: Math.abs(Math.round(speed * 100)) }));
 
-    // Camera follow - Dynamic
-    const camDist = 15 + Math.abs(speed) * 5;
-    const camHeight = 6 + Math.abs(speed) * 2;
-    const camOffset = new THREE.Vector3(
-      -Math.sin(rotation) * camDist,
-      camHeight,
-      -Math.cos(rotation) * camDist
+    // Camera follow - Smooth Third Person
+    const camDist = 18 + Math.abs(speed) * 8;
+    const camHeight = 8 + Math.abs(speed) * 3;
+    
+    // Calculate target position behind the car
+    const targetCamPos = new THREE.Vector3(
+      carRef.current.position.x - Math.sin(rotation) * camDist,
+      carRef.current.position.y + camHeight,
+      carRef.current.position.z - Math.cos(rotation) * camDist
     );
-    cameraRef.current.position.lerp(carRef.current.position.clone().add(camOffset), 0.05);
-    cameraRef.current.lookAt(carRef.current.position.clone().add(new THREE.Vector3(0, 1, 0)));
+    
+    // Smoothly move camera
+    cameraRef.current.position.lerp(targetCamPos, 0.08);
+    
+    // Dynamic FOV based on speed
+    const targetFOV = 60 + Math.abs(speed) * 20;
+    cameraRef.current.fov = THREE.MathUtils.lerp(cameraRef.current.fov, targetFOV, 0.1);
+    cameraRef.current.updateProjectionMatrix();
+    
+    // Look slightly ahead of the car for better visibility
+    const lookAheadDist = 10 + speed * 10;
+    const lookAtPos = new THREE.Vector3(
+      carRef.current.position.x + Math.sin(rotation) * lookAheadDist,
+      carRef.current.position.y + 1,
+      carRef.current.position.z + Math.cos(rotation) * lookAheadDist
+    );
+    cameraRef.current.lookAt(lookAtPos);
   }
 
   function checkCollisions() {
