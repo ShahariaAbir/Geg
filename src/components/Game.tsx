@@ -1,23 +1,21 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { motion, AnimatePresence } from 'motion/react';
-import { Trophy, Play, RotateCcw, ArrowUp, ArrowDown, ArrowLeft, ArrowRight } from 'lucide-react';
+import { Trophy, Play, RotateCcw, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Gauge } from 'lucide-react';
 
 // --- Constants ---
-const WORLD_SPEED = 0.6;
-const AIRCRAFT_SPEED = 0.25;
-const ROTATION_SPEED = 0.08;
-const RING_SPAWN_INTERVAL = 1800; // ms
-const OBSTACLE_SPAWN_INTERVAL = 1200; // ms
-const MAX_X = 18;
-const MAX_Y = 12;
-const MIN_Y = -4;
+const CAR_ACCELERATION = 0.5;
+const CAR_BRAKE = 0.8;
+const CAR_FRICTION = 0.98;
+const CAR_STEER_SPEED = 0.04;
+const CAR_MAX_SPEED = 1.5;
 
 interface GameState {
   score: number;
   isGameOver: boolean;
   isStarted: boolean;
   highScore: number;
+  speed: number;
 }
 
 export default function Game() {
@@ -26,25 +24,26 @@ export default function Game() {
     score: 0,
     isGameOver: false,
     isStarted: false,
-    highScore: parseInt(localStorage.getItem('skybound_highscore') || '0'),
+    highScore: parseInt(localStorage.getItem('urban_drive_highscore') || '0'),
+    speed: 0,
   });
 
-  // Refs for game logic state to avoid stale closures in the loop
+  // Refs for game logic state
   const gameRunningRef = useRef({
     isStarted: false,
     isGameOver: false,
-    score: 0
+    score: 0,
+    speed: 0,
+    velocity: new THREE.Vector3(),
+    rotation: 0,
   });
 
-  // Refs for Three.js objects to avoid re-renders
+  // Refs for Three.js objects
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
-  const aircraftRef = useRef<THREE.Group | null>(null);
-  const ringsRef = useRef<THREE.Mesh[]>([]);
-  const obstaclesRef = useRef<THREE.Mesh[]>([]);
-  const cloudsRef = useRef<THREE.Group[]>([]);
-  const trailsRef = useRef<THREE.Mesh[]>([]);
+  const carRef = useRef<THREE.Group | null>(null);
+  const buildingsRef = useRef<THREE.Mesh[]>([]);
   const frameIdRef = useRef<number | null>(null);
   const clockRef = useRef(new THREE.Clock());
 
@@ -56,59 +55,65 @@ export default function Game() {
 
     // --- Scene Setup ---
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x001a33); // Darker deep sky
-    scene.fog = new THREE.FogExp2(0x001a33, 0.008);
+    scene.background = new THREE.Color(0x111111); // Night city
+    scene.fog = new THREE.FogExp2(0x111111, 0.02);
     sceneRef.current = scene;
 
     const camera = new THREE.PerspectiveCamera(
-      70,
+      75,
       window.innerWidth / window.innerHeight,
       0.1,
-      1000
+      2000
     );
-    camera.position.set(0, 3, 12);
+    camera.position.set(0, 5, 15);
     cameraRef.current = camera;
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.toneMapping = THREE.ReinhardToneMapping;
-    renderer.toneMappingExposure = 1.2;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     const canvas = renderer.domElement;
     containerRef.current.appendChild(canvas);
     rendererRef.current = renderer;
 
     // --- Lighting ---
-    const ambientLight = new THREE.AmbientLight(0x4040ff, 0.4);
+    const ambientLight = new THREE.AmbientLight(0x404040, 0.5);
     scene.add(ambientLight);
 
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 1.2);
-    directionalLight.position.set(10, 20, 10);
-    directionalLight.castShadow = true;
-    scene.add(directionalLight);
+    const sunLight = new THREE.DirectionalLight(0xffffff, 1);
+    sunLight.position.set(50, 100, 50);
+    sunLight.castShadow = true;
+    sunLight.shadow.camera.left = -100;
+    sunLight.shadow.camera.right = 100;
+    sunLight.shadow.camera.top = 100;
+    sunLight.shadow.camera.bottom = -100;
+    scene.add(sunLight);
 
-    const pointLight = new THREE.PointLight(0x00ffff, 2, 50);
-    pointLight.position.set(0, 5, 5);
-    scene.add(pointLight);
-
-    // --- Aircraft ---
-    const aircraft = createAircraft();
-    scene.add(aircraft);
-    aircraftRef.current = aircraft;
-
-    // --- Ground (Grid) ---
-    const groundGeometry = new THREE.PlaneGeometry(2000, 2000, 100, 100);
-    const groundMaterial = new THREE.MeshStandardMaterial({
-      color: 0x00ffff,
-      wireframe: true,
-      transparent: true,
-      opacity: 0.15,
-      emissive: 0x004444,
+    // --- Ground ---
+    const groundGeom = new THREE.PlaneGeometry(2000, 2000);
+    const groundMat = new THREE.MeshStandardMaterial({ 
+      color: 0x222222,
+      roughness: 0.8,
+      metalness: 0.2
     });
-    const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+    const ground = new THREE.Mesh(groundGeom, groundMat);
     ground.rotation.x = -Math.PI / 2;
-    ground.position.y = -15;
+    ground.receiveShadow = true;
     scene.add(ground);
+
+    // Road Grid
+    const grid = new THREE.GridHelper(2000, 100, 0x00ffff, 0x444444);
+    grid.position.y = 0.01;
+    scene.add(grid);
+
+    // --- Car ---
+    const car = createCar();
+    scene.add(car);
+    carRef.current = car;
+
+    // --- Environment (Buildings) ---
+    createCity(scene);
 
     // --- Resize Handler ---
     const handleResize = () => {
@@ -125,79 +130,14 @@ export default function Game() {
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
 
-    // --- Clouds ---
-    const spawnCloud = () => {
-      const group = new THREE.Group();
-      const count = 5 + Math.floor(Math.random() * 5);
-      for (let i = 0; i < count; i++) {
-        const geom = new THREE.IcosahedronGeometry(2 + Math.random() * 3, 1);
-        const mat = new THREE.MeshStandardMaterial({ 
-          color: 0xffffff, 
-          transparent: true, 
-          opacity: 0.4,
-          roughness: 0.8 
-        });
-        const mesh = new THREE.Mesh(geom, mat);
-        mesh.position.set(Math.random() * 10 - 5, Math.random() * 5 - 2.5, Math.random() * 10 - 5);
-        group.add(mesh);
-      }
-      group.position.set((Math.random() - 0.5) * 150, (Math.random() - 0.5) * 60 + 20, -300);
-      scene.add(group);
-      cloudsRef.current.push(group);
-    };
-
-    // Initial clouds
-    for (let i = 0; i < 20; i++) spawnCloud();
-
     // --- Game Loop ---
-    let lastRingSpawn = 0;
-    let lastObstacleSpawn = 0;
-
     const animate = () => {
       frameIdRef.current = requestAnimationFrame(animate);
-      const delta = Math.min(clockRef.current.getDelta(), 0.1); // Cap delta to avoid huge jumps
-      const time = clockRef.current.getElapsedTime();
+      const delta = Math.min(clockRef.current.getDelta(), 0.1);
 
       if (gameRunningRef.current.isStarted && !gameRunningRef.current.isGameOver) {
-        // Handle Movement
-        updateAircraft(delta);
-
-        // Spawn Rings
-        if (time * 1000 - lastRingSpawn > RING_SPAWN_INTERVAL) {
-          spawnRing();
-          lastRingSpawn = time * 1000;
-        }
-
-        // Spawn Obstacles
-        if (time * 1000 - lastObstacleSpawn > OBSTACLE_SPAWN_INTERVAL) {
-          spawnObstacle();
-          lastObstacleSpawn = time * 1000;
-        }
-
-        // Update Objects
-        updateRings(delta);
-        updateObstacles(delta);
-        updateTrails(delta);
-
-        // Update Clouds
-        cloudsRef.current.forEach((cloud) => {
-          cloud.position.z += WORLD_SPEED * 80 * delta;
-          if (cloud.position.z > 50) {
-            cloud.position.z = -300;
-            cloud.position.x = (Math.random() - 0.5) * 150;
-          }
-        });
-
-        // Ground animation
-        ground.position.z += WORLD_SPEED * 20 * delta;
-        if (ground.position.z > 100) ground.position.z = 0;
-
-        // Dynamic Camera FOV
-        if (cameraRef.current) {
-          const targetFOV = 70 + (Math.abs(aircraftRef.current?.rotation.z || 0) * 15);
-          cameraRef.current.fov = THREE.MathUtils.lerp(cameraRef.current.fov, targetFOV, 0.1);
-          cameraRef.current.updateProjectionMatrix();
-        }
+        updateCar(delta);
+        checkCollisions();
       }
 
       renderer.render(scene, camera);
@@ -210,355 +150,368 @@ export default function Game() {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
       if (frameIdRef.current) cancelAnimationFrame(frameIdRef.current);
-      cloudsRef.current.forEach(c => scene.remove(c));
-      cloudsRef.current = [];
       if (containerRef.current && canvas) {
         containerRef.current.removeChild(canvas);
       }
       renderer.dispose();
     };
-  }, []); // Only run once on mount
+  }, []);
 
   // --- Helper Functions ---
 
-  function createAircraft() {
+  function createCar() {
     const group = new THREE.Group();
+    const carBody = new THREE.Group(); // Sub-group for tilting
+    group.add(carBody);
 
-    // Body - Sleeker
-    const bodyGeom = new THREE.CylinderGeometry(0.4, 0.6, 4, 8);
+    // Body
+    const bodyGeom = new THREE.BoxGeometry(2, 0.6, 4.5);
     const bodyMat = new THREE.MeshStandardMaterial({ 
-      color: 0x333333, 
-      metalness: 0.8, 
-      roughness: 0.2,
-      emissive: 0x111111 
+      color: 0xcc0000, 
+      metalness: 0.9, 
+      roughness: 0.1,
+      envMapIntensity: 1
     });
     const body = new THREE.Mesh(bodyGeom, bodyMat);
-    body.rotation.x = Math.PI / 2;
-    group.add(body);
+    body.position.y = 0.6;
+    body.castShadow = true;
+    carBody.add(body);
 
-    // Wings - Angled
-    const wingGeom = new THREE.BoxGeometry(5, 0.05, 1.5);
-    const wingMat = new THREE.MeshStandardMaterial({ color: 0x00ffff, emissive: 0x004444 });
-    const wings = new THREE.Mesh(wingGeom, wingMat);
-    wings.position.set(0, 0, -0.2);
-    group.add(wings);
-
-    // Tail
-    const tailGeom = new THREE.BoxGeometry(0.05, 1.2, 0.8);
-    const tailMat = new THREE.MeshStandardMaterial({ color: 0x00ffff, emissive: 0x004444 });
-    const tail = new THREE.Mesh(tailGeom, tailMat);
-    tail.position.set(0, 0.6, -1.5);
-    group.add(tail);
-
-    // Cockpit - Glowing
-    const cockpitGeom = new THREE.SphereGeometry(0.35, 16, 16);
-    const cockpitMat = new THREE.MeshStandardMaterial({ 
-      color: 0x00ffff, 
-      emissive: 0x00ffff, 
-      emissiveIntensity: 0.5,
-      transparent: true, 
-      opacity: 0.8 
+    // Cabin (Glassy)
+    const cabinGeom = new THREE.BoxGeometry(1.7, 0.7, 2.2);
+    const cabinMat = new THREE.MeshStandardMaterial({ 
+      color: 0x111111, 
+      metalness: 1, 
+      roughness: 0,
+      transparent: true,
+      opacity: 0.9
     });
-    const cockpit = new THREE.Mesh(cockpitGeom, cockpitMat);
-    cockpit.position.set(0, 0.4, 0.8);
-    cockpit.scale.set(1, 1, 2.5);
-    group.add(cockpit);
+    const cabin = new THREE.Mesh(cabinGeom, cabinMat);
+    cabin.position.set(0, 1.2, -0.1);
+    cabin.castShadow = true;
+    carBody.add(cabin);
 
-    // Engines
-    const engineGeom = new THREE.CylinderGeometry(0.3, 0.3, 1, 8);
-    const engineMat = new THREE.MeshStandardMaterial({ color: 0x111111 });
-    const engineL = new THREE.Mesh(engineGeom, engineMat);
-    engineL.rotation.x = Math.PI / 2;
-    engineL.position.set(-1.2, -0.2, -1);
-    group.add(engineL);
+    // Spoiler
+    const spoilerPostGeom = new THREE.BoxGeometry(0.1, 0.4, 0.1);
+    const spoilerPostL = new THREE.Mesh(spoilerPostGeom, bodyMat);
+    spoilerPostL.position.set(-0.7, 1, -1.8);
+    carBody.add(spoilerPostL);
+    const spoilerPostR = spoilerPostL.clone();
+    spoilerPostR.position.x = 0.7;
+    carBody.add(spoilerPostR);
 
-    const engineR = engineL.clone();
-    engineR.position.x = 1.2;
-    group.add(engineR);
+    const spoilerWingGeom = new THREE.BoxGeometry(2.2, 0.1, 0.6);
+    const spoilerWing = new THREE.Mesh(spoilerWingGeom, bodyMat);
+    spoilerWing.position.set(0, 1.2, -1.8);
+    carBody.add(spoilerWing);
+
+    // Wheels
+    const wheelGeom = new THREE.CylinderGeometry(0.45, 0.45, 0.4, 24);
+    const wheelMat = new THREE.MeshStandardMaterial({ color: 0x050505, roughness: 0.9 });
+    const rimGeom = new THREE.CylinderGeometry(0.3, 0.3, 0.41, 12);
+    const rimMat = new THREE.MeshStandardMaterial({ color: 0x888888, metalness: 1, roughness: 0.2 });
+
+    const wheelPositions = [
+      [-1.1, 0.45, 1.4], [1.1, 0.45, 1.4],
+      [-1.1, 0.45, -1.4], [1.1, 0.45, -1.4]
+    ];
+
+    wheelPositions.forEach(pos => {
+      const wheelGroup = new THREE.Group();
+      const wheel = new THREE.Mesh(wheelGeom, wheelMat);
+      wheel.rotation.z = Math.PI / 2;
+      wheelGroup.add(wheel);
+
+      const rim = new THREE.Mesh(rimGeom, rimMat);
+      rim.rotation.z = Math.PI / 2;
+      wheelGroup.add(rim);
+
+      wheelGroup.position.set(pos[0], pos[1], pos[2]);
+      wheelGroup.castShadow = true;
+      group.add(wheelGroup);
+    });
+
+    // Headlights (Emissive)
+    const lightGeom = new THREE.BoxGeometry(0.5, 0.2, 0.1);
+    const lightMat = new THREE.MeshStandardMaterial({ 
+      color: 0xffffff, 
+      emissive: 0xffffff, 
+      emissiveIntensity: 2 
+    });
+    const lightL = new THREE.Mesh(lightGeom, lightMat);
+    lightL.position.set(-0.65, 0.7, 2.2);
+    carBody.add(lightL);
+
+    const lightR = lightL.clone();
+    lightR.position.x = 0.65;
+    carBody.add(lightR);
+
+    // Tail lights
+    const tailLightMat = new THREE.MeshStandardMaterial({ 
+      color: 0xff0000, 
+      emissive: 0xff0000, 
+      emissiveIntensity: 1 
+    });
+    const tailL = new THREE.Mesh(lightGeom, tailLightMat);
+    tailL.position.set(-0.65, 0.7, -2.2);
+    carBody.add(tailL);
+
+    const tailR = tailL.clone();
+    tailR.position.x = 0.65;
+    carBody.add(tailR);
 
     return group;
   }
 
-  function updateAircraft(delta: number) {
-    if (!aircraftRef.current) return;
-
-    const speed = AIRCRAFT_SPEED * 60 * delta;
-    
-    let targetX = aircraftRef.current.position.x;
-    let targetY = aircraftRef.current.position.y;
-    let targetRotZ = 0;
-    let targetRotX = 0;
-
-    const isLeft = keysRef.current['ArrowLeft'] || keysRef.current['KeyA'];
-    const isRight = keysRef.current['ArrowRight'] || keysRef.current['KeyD'];
-    const isUp = keysRef.current['ArrowUp'] || keysRef.current['KeyW'];
-    const isDown = keysRef.current['ArrowDown'] || keysRef.current['KeyS'];
-
-    if (isLeft) {
-      targetX -= speed;
-      targetRotZ = 0.8;
-    }
-    if (isRight) {
-      targetX += speed;
-      targetRotZ = -0.8;
-    }
-    if (isUp) {
-      targetY += speed;
-      targetRotX = 0.3;
-    }
-    if (isDown) {
-      targetY -= speed;
-      targetRotX = -0.3;
-    }
-
-    // Constraints
-    aircraftRef.current.position.x = THREE.MathUtils.lerp(aircraftRef.current.position.x, THREE.MathUtils.clamp(targetX, -MAX_X, MAX_X), 0.15);
-    aircraftRef.current.position.y = THREE.MathUtils.lerp(aircraftRef.current.position.y, THREE.MathUtils.clamp(targetY, MIN_Y, MAX_Y), 0.15);
-
-    // Smooth Rotation - More aggressive banking
-    aircraftRef.current.rotation.z = THREE.MathUtils.lerp(aircraftRef.current.rotation.z, targetRotZ, 0.1);
-    aircraftRef.current.rotation.x = THREE.MathUtils.lerp(aircraftRef.current.rotation.x, targetRotX, 0.1);
-    aircraftRef.current.rotation.y = THREE.MathUtils.lerp(aircraftRef.current.rotation.y, -targetRotZ * 0.2, 0.1);
-
-    // Camera follow - More dynamic
-    if (cameraRef.current) {
-      const camTargetX = aircraftRef.current.position.x * 0.6;
-      const camTargetY = aircraftRef.current.position.y + 3;
-      const camTargetZ = 12 + (Math.abs(targetRotZ) * 2); // Pull back on turns
-
-      cameraRef.current.position.x = THREE.MathUtils.lerp(cameraRef.current.position.x, camTargetX, 0.08);
-      cameraRef.current.position.y = THREE.MathUtils.lerp(cameraRef.current.position.y, camTargetY, 0.08);
-      cameraRef.current.position.z = THREE.MathUtils.lerp(cameraRef.current.position.z, camTargetZ, 0.08);
+  function createCity(scene: THREE.Scene) {
+    const buildingGeom = new THREE.BoxGeometry(1, 1, 1);
+    for (let i = 0; i < 300; i++) {
+      const h = 15 + Math.random() * 60;
+      const w = 8 + Math.random() * 12;
+      const d = 8 + Math.random() * 12;
       
-      cameraRef.current.lookAt(
-        aircraftRef.current.position.x * 0.8, 
-        aircraftRef.current.position.y, 
-        aircraftRef.current.position.z - 10
+      const hue = Math.random() * 0.1 + 0.6; // Blueish/Greyish
+      const mat = new THREE.MeshStandardMaterial({ 
+        color: new THREE.Color().setHSL(hue, 0.1, 0.15),
+        roughness: 0.5,
+        metalness: 0.5
+      });
+      
+      const building = new THREE.Mesh(buildingGeom, mat);
+      building.scale.set(w, h, d);
+      building.position.set(
+        (Math.random() - 0.5) * 600,
+        h / 2,
+        (Math.random() - 0.5) * 600
       );
+      
+      if (Math.abs(building.position.x) < 20 || Math.abs(building.position.z) < 20) {
+        building.position.x += 40;
+      }
+      
+      building.castShadow = true;
+      building.receiveShadow = true;
+      scene.add(building);
+      buildingsRef.current.push(building);
+
+      // Add windows (emissive dots)
+      if (Math.random() > 0.3) {
+        const windowGeom = new THREE.PlaneGeometry(0.5, 0.5);
+        const windowMat = new THREE.MeshBasicMaterial({ color: 0xffffaa });
+        for (let j = 0; j < 10; j++) {
+          const win = new THREE.Mesh(windowGeom, windowMat);
+          win.position.set(
+            (Math.random() - 0.5) * w,
+            Math.random() * h,
+            d / 2 + 0.01
+          );
+          building.add(win);
+        }
+      }
     }
 
-    // Spawn Trail
-    if (Math.random() > 0.5) spawnTrail();
+    // Street Lamps
+    for (let i = 0; i < 50; i++) {
+      const lampGroup = new THREE.Group();
+      const poleGeom = new THREE.CylinderGeometry(0.1, 0.1, 8);
+      const pole = new THREE.Mesh(poleGeom, new THREE.MeshStandardMaterial({ color: 0x333333 }));
+      pole.position.y = 4;
+      lampGroup.add(pole);
+
+      const bulbGeom = new THREE.SphereGeometry(0.3);
+      const bulbMat = new THREE.MeshBasicMaterial({ color: 0xffccaa });
+      const bulb = new THREE.Mesh(bulbGeom, bulbMat);
+      bulb.position.set(0, 8, 1);
+      lampGroup.add(bulb);
+
+      const lampLight = new THREE.PointLight(0xffccaa, 10, 30);
+      lampLight.position.set(0, 8, 1);
+      lampGroup.add(lampLight);
+
+      lampGroup.position.set(
+        (Math.random() - 0.5) * 500,
+        0,
+        (Math.random() - 0.5) * 500
+      );
+      if (Math.abs(lampGroup.position.x) < 10) lampGroup.position.x += 15;
+      scene.add(lampGroup);
+    }
   }
 
-  function spawnTrail() {
-    if (!sceneRef.current || !aircraftRef.current) return;
-    const geom = new THREE.SphereGeometry(0.1, 4, 4);
-    const mat = new THREE.MeshBasicMaterial({ color: 0x00ffff, transparent: true, opacity: 0.6 });
-    const trail = new THREE.Mesh(geom, mat);
+  function updateCar(delta: number) {
+    if (!carRef.current || !cameraRef.current) return;
+
+    const keys = keysRef.current;
+    let { speed, rotation } = gameRunningRef.current;
+
+    // Acceleration
+    if (keys['ArrowUp'] || keys['KeyW']) {
+      speed += CAR_ACCELERATION * delta;
+    } else if (keys['ArrowDown'] || keys['KeyS']) {
+      speed -= CAR_BRAKE * delta;
+    } else {
+      speed *= CAR_FRICTION;
+    }
+
+    // Steering
+    let steerAmount = 0;
+    if (Math.abs(speed) > 0.01) {
+      const steerDir = speed > 0 ? 1 : -1;
+      if (keys['ArrowLeft'] || keys['KeyA']) {
+        steerAmount = CAR_STEER_SPEED;
+        rotation += steerAmount * steerDir;
+      }
+      if (keys['ArrowRight'] || keys['KeyD']) {
+        steerAmount = -CAR_STEER_SPEED;
+        rotation += steerAmount * steerDir;
+      }
+    }
+
+    speed = THREE.MathUtils.clamp(speed, -CAR_MAX_SPEED / 2, CAR_MAX_SPEED);
     
-    // Position at engines
-    const offset = (Math.random() > 0.5 ? 1 : -1) * 1.2;
-    trail.position.copy(aircraftRef.current.position);
-    trail.position.x += offset;
-    trail.position.y -= 0.2;
-    trail.position.z -= 1;
+    // Update position
+    carRef.current.position.x += Math.sin(rotation) * speed;
+    carRef.current.position.z += Math.cos(rotation) * speed;
+    carRef.current.rotation.y = rotation;
+
+    // Suspension Tilt (Visual only)
+    const carBody = carRef.current.children[0] as THREE.Group;
+    if (carBody) {
+      // Tilt based on steering and acceleration
+      carBody.rotation.z = THREE.MathUtils.lerp(carBody.rotation.z, steerAmount * speed * 0.5, 0.1);
+      carBody.rotation.x = THREE.MathUtils.lerp(carBody.rotation.x, (speed - gameRunningRef.current.speed) * 0.5, 0.1);
+    }
+
+    gameRunningRef.current.speed = speed;
+    gameRunningRef.current.rotation = rotation;
+    setGameState(prev => ({ ...prev, speed: Math.abs(Math.round(speed * 100)) }));
+
+    // Camera follow - Dynamic
+    const camDist = 15 + Math.abs(speed) * 5;
+    const camHeight = 6 + Math.abs(speed) * 2;
+    const camOffset = new THREE.Vector3(
+      -Math.sin(rotation) * camDist,
+      camHeight,
+      -Math.cos(rotation) * camDist
+    );
+    cameraRef.current.position.lerp(carRef.current.position.clone().add(camOffset), 0.05);
+    cameraRef.current.lookAt(carRef.current.position.clone().add(new THREE.Vector3(0, 1, 0)));
+  }
+
+  function checkCollisions() {
+    if (!carRef.current) return;
+    const carPos = carRef.current.position;
     
-    sceneRef.current.add(trail);
-    trailsRef.current.push(trail);
-  }
-
-  function updateTrails(delta: number) {
-    const speed = WORLD_SPEED * 100 * delta;
-    for (let i = trailsRef.current.length - 1; i >= 0; i--) {
-      const trail = trailsRef.current[i];
-      trail.position.z += speed;
-      trail.scale.multiplyScalar(0.95);
-      if (trail.scale.x < 0.1) {
-        sceneRef.current?.remove(trail);
-        trailsRef.current.splice(i, 1);
-      }
-    }
-  }
-
-  function spawnRing() {
-    if (!sceneRef.current) return;
-    const geometry = new THREE.TorusGeometry(2.5, 0.15, 16, 48);
-    const material = new THREE.MeshStandardMaterial({ 
-      color: 0x00ffff, 
-      emissive: 0x00ffff,
-      emissiveIntensity: 1,
-      metalness: 1,
-      roughness: 0
-    });
-    const ring = new THREE.Mesh(geometry, material);
-
-    ring.position.set(
-      (Math.random() - 0.5) * 35,
-      (Math.random() - 0.5) * 15 + 2,
-      -150
-    );
-    sceneRef.current.add(ring);
-    ringsRef.current.push(ring);
-  }
-
-  function spawnObstacle() {
-    if (!sceneRef.current) return;
-    const geometry = new THREE.OctahedronGeometry(2, 0);
-    const material = new THREE.MeshStandardMaterial({ 
-      color: 0xff0055, 
-      emissive: 0x330011,
-      metalness: 0.5,
-      roughness: 0.5
-    });
-    const obstacle = new THREE.Mesh(geometry, material);
-
-    obstacle.position.set(
-      (Math.random() - 0.5) * 40,
-      (Math.random() - 0.5) * 20 + 2,
-      -150
-    );
-    obstacle.rotation.set(Math.random(), Math.random(), Math.random());
-    sceneRef.current.add(obstacle);
-    obstaclesRef.current.push(obstacle);
-  }
-
-  function updateRings(delta: number) {
-    if (!aircraftRef.current) return;
-    const speed = WORLD_SPEED * 120 * delta;
-
-    for (let i = ringsRef.current.length - 1; i >= 0; i--) {
-      const ring = ringsRef.current[i];
-      ring.position.z += speed;
-      ring.rotation.y += 0.05;
-
-      // Collision Detection
-      const dist = ring.position.distanceTo(aircraftRef.current.position);
-      if (dist < 3) {
-        gameRunningRef.current.score += 10;
-        setGameState(prev => ({ ...prev, score: gameRunningRef.current.score }));
-        sceneRef.current?.remove(ring);
-        ringsRef.current.splice(i, 1);
-        continue;
-      }
-
-      if (ring.position.z > 20) {
-        sceneRef.current?.remove(ring);
-        ringsRef.current.splice(i, 1);
-      }
-    }
-  }
-
-  function updateObstacles(delta: number) {
-    if (!aircraftRef.current) return;
-    const speed = WORLD_SPEED * 120 * delta;
-
-    for (let i = obstaclesRef.current.length - 1; i >= 0; i--) {
-      const obstacle = obstaclesRef.current[i];
-      obstacle.position.z += speed;
-      obstacle.rotation.x += 0.02;
-      obstacle.rotation.y += 0.02;
-
-      // Collision Detection
-      const dist = obstacle.position.distanceTo(aircraftRef.current.position);
-      if (dist < 2) {
+    for (const building of buildingsRef.current) {
+      const bPos = building.position;
+      const bScale = building.scale;
+      
+      const dx = Math.abs(carPos.x - bPos.x);
+      const dz = Math.abs(carPos.z - bPos.z);
+      
+      if (dx < bScale.x / 2 + 1 && dz < bScale.z / 2 + 1) {
         gameOver();
-      }
-
-      if (obstacle.position.z > 20) {
-        sceneRef.current?.remove(obstacle);
-        obstaclesRef.current.splice(i, 1);
+        break;
       }
     }
   }
 
   function gameOver() {
     gameRunningRef.current.isGameOver = true;
+    gameRunningRef.current.isStarted = false;
     setGameState(prev => {
-      const newHighScore = Math.max(gameRunningRef.current.score, prev.highScore);
-      localStorage.setItem('skybound_highscore', newHighScore.toString());
+      const newHighScore = Math.max(prev.score, prev.highScore);
+      localStorage.setItem('urban_drive_highscore', newHighScore.toString());
       return { ...prev, isGameOver: true, highScore: newHighScore };
     });
   }
 
   const startGame = () => {
-    // Reset state
     gameRunningRef.current = {
       isStarted: true,
       isGameOver: false,
-      score: 0
+      score: 0,
+      speed: 0,
+      velocity: new THREE.Vector3(),
+      rotation: 0,
     };
-    setGameState(prev => ({ ...prev, score: 0, isGameOver: false, isStarted: true }));
-    // Clear existing objects
-    ringsRef.current.forEach(r => sceneRef.current?.remove(r));
-    obstaclesRef.current.forEach(o => sceneRef.current?.remove(o));
-    trailsRef.current.forEach(t => sceneRef.current?.remove(t));
-    ringsRef.current = [];
-    obstaclesRef.current = [];
-    trailsRef.current = [];
-    if (aircraftRef.current) {
-      aircraftRef.current.position.set(0, 0, 0);
-      aircraftRef.current.rotation.set(0, 0, 0);
+    if (carRef.current) {
+      carRef.current.position.set(0, 0, 0);
+      carRef.current.rotation.set(0, 0, 0);
     }
+    setGameState(prev => ({ ...prev, score: 0, isGameOver: false, isStarted: true, speed: 0 }));
     clockRef.current.start();
   };
 
-  // Mobile Controls
-  const handleTouch = (dir: string, active: boolean) => {
-    const keyMap: { [key: string]: string } = {
-      up: 'ArrowUp',
-      down: 'ArrowDown',
-      left: 'ArrowLeft',
-      right: 'ArrowRight'
-    };
-    keysRef.current[keyMap[dir]] = active;
-  };
-
   return (
-    <div className="relative w-full h-full font-sans text-white overflow-hidden">
+    <div className="relative w-full h-full font-sans text-white overflow-hidden bg-black">
       <div ref={containerRef} className="absolute inset-0 z-0" />
 
-      {/* UI Overlay */}
+      {/* HUD */}
       <div className="absolute top-0 left-0 w-full p-6 flex justify-between items-start z-10 pointer-events-none">
-        <div className="bg-black/40 backdrop-blur-md p-4 rounded-2xl border border-white/10">
-          <p className="text-xs uppercase tracking-widest opacity-60 mb-1">Score</p>
-          <p className="text-4xl font-bold tabular-nums">{gameState.score}</p>
+        <div className="bg-black/60 backdrop-blur-xl p-6 rounded-3xl border border-white/10 flex items-center gap-4 shadow-2xl">
+          <div className="p-3 bg-white/10 rounded-2xl">
+            <Gauge className="text-cyan-400" size={24} />
+          </div>
+          <div>
+            <p className="text-[10px] uppercase tracking-[0.2em] text-white/40 font-bold mb-1">Velocity</p>
+            <div className="flex items-baseline gap-1">
+              <p className="text-4xl font-black tabular-nums tracking-tighter">{gameState.speed}</p>
+              <p className="text-xs font-bold text-cyan-400">KM/H</p>
+            </div>
+          </div>
         </div>
-        <div className="bg-black/40 backdrop-blur-md p-4 rounded-2xl border border-white/10 text-right">
-          <p className="text-xs uppercase tracking-widest opacity-60 mb-1 flex items-center justify-end gap-2">
-            <Trophy size={12} /> High Score
+        
+        <div className="bg-black/60 backdrop-blur-xl p-6 rounded-3xl border border-white/10 text-right shadow-2xl">
+          <p className="text-[10px] uppercase tracking-[0.2em] text-white/40 font-bold mb-1 flex items-center justify-end gap-2">
+            <Trophy size={12} className="text-yellow-400" /> Record
           </p>
-          <p className="text-2xl font-bold tabular-nums">{gameState.highScore}</p>
+          <p className="text-2xl font-black tabular-nums tracking-tighter">{gameState.highScore}</p>
         </div>
       </div>
 
       {/* Start Screen */}
       <AnimatePresence>
-        {!gameState.isStarted && (
+        {!gameState.isStarted && !gameState.isGameOver && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/60 backdrop-blur-sm"
+            className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/80 backdrop-blur-md"
           >
-            <motion.h1
-              initial={{ y: -50 }}
-              animate={{ y: 0 }}
-              className="text-7xl font-black italic tracking-tighter mb-2 text-transparent bg-clip-text bg-gradient-to-b from-white to-white/40"
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              className="text-center"
             >
-              SKYBOUND ACE
-            </motion.h1>
-            <p className="text-white/60 mb-12 tracking-widest uppercase text-sm">3D Flight Simulator</p>
-            
-            <button
-              onClick={startGame}
-              className="group relative flex items-center gap-4 bg-white text-black px-12 py-6 rounded-full font-bold text-xl transition-all hover:scale-105 active:scale-95"
-            >
-              <Play fill="currentColor" />
-              START MISSION
-              <div className="absolute -inset-1 bg-white/20 blur-xl rounded-full opacity-0 group-hover:opacity-100 transition-opacity" />
-            </button>
+              <h1 className="text-8xl font-black italic tracking-tighter mb-2 text-transparent bg-clip-text bg-gradient-to-b from-white to-white/20">
+                URBAN DRIVE
+              </h1>
+              <p className="text-cyan-400 tracking-[0.5em] uppercase text-xs font-bold mb-16">Realistic City Simulator</p>
+              
+              <button
+                onClick={startGame}
+                className="group relative px-16 py-8 bg-white text-black rounded-full font-black text-2xl transition-all hover:scale-105 active:scale-95 shadow-[0_0_50px_rgba(255,255,255,0.3)]"
+              >
+                <div className="flex items-center gap-4">
+                  <Play fill="currentColor" size={24} />
+                  IGNITION
+                </div>
+                <div className="absolute -inset-2 bg-white/20 blur-2xl rounded-full opacity-0 group-hover:opacity-100 transition-opacity" />
+              </button>
 
-            <div className="mt-12 grid grid-cols-2 gap-8 text-center text-white/40 text-xs uppercase tracking-widest">
-              <div>
-                <p className="mb-2">Movement</p>
-                <p className="text-white">WASD / ARROWS</p>
+              <div className="mt-20 flex gap-12 justify-center text-[10px] font-bold tracking-[0.2em] text-white/30 uppercase">
+                <div className="flex flex-col gap-2">
+                  <span className="text-white/60">Drive</span>
+                  <span>WASD / ARROWS</span>
+                </div>
+                <div className="w-px h-8 bg-white/10" />
+                <div className="flex flex-col gap-2">
+                  <span className="text-white/60">Objective</span>
+                  <span>EXPLORE & SURVIVE</span>
+                </div>
               </div>
-              <div>
-                <p className="mb-2">Objective</p>
-                <p className="text-white">COLLECT RINGS</p>
-              </div>
-            </div>
+            </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
@@ -569,58 +522,40 @@ export default function Game() {
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-red-950/80 backdrop-blur-md"
+            className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-red-950/90 backdrop-blur-2xl"
           >
-            <h2 className="text-6xl font-black italic mb-2">MISSION FAILED</h2>
-            <p className="text-white/60 mb-8 uppercase tracking-widest">Aircraft Destroyed</p>
-            
-            <div className="bg-black/40 p-8 rounded-3xl border border-white/10 mb-12 text-center min-w-[300px]">
-              <p className="text-sm text-white/40 uppercase mb-2">Final Score</p>
-              <p className="text-6xl font-bold mb-6">{gameState.score}</p>
-              <div className="h-px bg-white/10 mb-6" />
-              <p className="text-xs text-white/40 uppercase mb-1">Personal Best</p>
-              <p className="text-2xl font-bold">{gameState.highScore}</p>
-            </div>
-
-            <button
-              onClick={startGame}
-              className="flex items-center gap-4 bg-white text-black px-12 py-6 rounded-full font-bold text-xl transition-all hover:scale-105 active:scale-95"
+            <motion.div
+              initial={{ y: 20, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              className="text-center"
             >
-              <RotateCcw />
-              RETRY MISSION
-            </button>
+              <h2 className="text-7xl font-black italic mb-4 tracking-tighter">CRITICAL IMPACT</h2>
+              <p className="text-white/40 mb-12 uppercase tracking-[0.3em] text-sm font-bold">Vehicle Integrity Compromised</p>
+              
+              <div className="bg-black/60 p-12 rounded-[3rem] border border-white/10 mb-12 shadow-2xl min-w-[400px]">
+                <p className="text-[10px] text-white/40 uppercase font-black tracking-widest mb-2">Session High Speed</p>
+                <p className="text-8xl font-black mb-8 tracking-tighter">{gameState.speed}<span className="text-2xl text-cyan-400 ml-2">KM/H</span></p>
+                <div className="h-px bg-white/10 mb-8" />
+                <div className="flex justify-between items-center px-4">
+                  <span className="text-[10px] text-white/40 uppercase font-black tracking-widest">All-Time Record</span>
+                  <span className="text-2xl font-black tracking-tighter">{gameState.highScore}</span>
+                </div>
+              </div>
+
+              <button
+                onClick={startGame}
+                className="flex items-center gap-4 bg-white text-black px-16 py-8 rounded-full font-black text-2xl transition-all hover:scale-105 active:scale-95 shadow-[0_0_50px_rgba(255,255,255,0.2)]"
+              >
+                <RotateCcw size={24} strokeWidth={3} />
+                REDEPLOY
+              </button>
+            </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* Mobile Controls */}
-      {gameState.isStarted && !gameState.isGameOver && (
-        <div className="absolute bottom-12 left-0 w-full px-8 flex justify-between items-end z-10 md:hidden">
-          <div className="grid grid-cols-3 gap-2">
-            <div />
-            <ControlButton icon={<ArrowUp />} onTouch={(a) => handleTouch('up', a)} />
-            <div />
-            <ControlButton icon={<ArrowLeft />} onTouch={(a) => handleTouch('left', a)} />
-            <ControlButton icon={<ArrowDown />} onTouch={(a) => handleTouch('down', a)} />
-            <ControlButton icon={<ArrowRight />} onTouch={(a) => handleTouch('right', a)} />
-          </div>
-        </div>
-      )}
+      {/* Vignette Effect */}
+      <div className="absolute inset-0 pointer-events-none shadow-[inset_0_0_150px_rgba(0,0,0,0.8)] z-0" />
     </div>
-  );
-}
-
-function ControlButton({ icon, onTouch }: { icon: React.ReactNode, onTouch: (active: boolean) => void }) {
-  return (
-    <button
-      className="w-16 h-16 bg-white/10 backdrop-blur-md rounded-2xl flex items-center justify-center active:bg-white/30 transition-colors pointer-events-auto"
-      onMouseDown={() => onTouch(true)}
-      onMouseUp={() => onTouch(false)}
-      onMouseLeave={() => onTouch(false)}
-      onTouchStart={(e) => { e.preventDefault(); onTouch(true); }}
-      onTouchEnd={(e) => { e.preventDefault(); onTouch(false); }}
-    >
-      {icon}
-    </button>
   );
 }
