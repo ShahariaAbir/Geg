@@ -208,8 +208,7 @@ export default function Game() {
 
       if (gameRunningRef.current.isStarted && !gameRunningRef.current.isGameOver) {
         updateCar(delta);
-        // COLLISION CHECK REMOVED - Game no longer ends when hitting buildings
-        // checkCollisions();
+        checkCollisions();
       }
 
       renderer.render(scene, camera);
