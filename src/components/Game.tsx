@@ -43,9 +43,11 @@ export default function Game() {
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const carRef = useRef<THREE.Group | null>(null);
-  const buildingsRef = useRef<THREE.Mesh[]>([]);
+  const buildingsDataRef = useRef<{ pos: THREE.Vector3, scale: THREE.Vector3, color: THREE.Color }[]>([]);
+  const buildingsMeshRef = useRef<THREE.InstancedMesh | null>(null);
   const frameIdRef = useRef<number | null>(null);
   const clockRef = useRef(new THREE.Clock());
+  const [isLoaded, setIsLoaded] = useState(false);
 
   // Input state
   const keysRef = useRef<{ [key: string]: boolean }>({});
@@ -68,26 +70,28 @@ export default function Game() {
     camera.position.set(0, 5, 15);
     cameraRef.current = camera;
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5)); // Lower pixel ratio for performance
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.shadowMap.type = THREE.BasicShadowMap; // Faster shadow map
     const canvas = renderer.domElement;
     containerRef.current.appendChild(canvas);
     rendererRef.current = renderer;
 
     // --- Lighting ---
-    const ambientLight = new THREE.AmbientLight(0x404040, 0.5);
+    const ambientLight = new THREE.AmbientLight(0x202020, 0.5);
     scene.add(ambientLight);
 
-    const sunLight = new THREE.DirectionalLight(0xffffff, 1);
+    const sunLight = new THREE.DirectionalLight(0xffffff, 0.8);
     sunLight.position.set(50, 100, 50);
     sunLight.castShadow = true;
-    sunLight.shadow.camera.left = -100;
-    sunLight.shadow.camera.right = 100;
-    sunLight.shadow.camera.top = 100;
-    sunLight.shadow.camera.bottom = -100;
+    sunLight.shadow.mapSize.width = 512; // Smaller shadow map
+    sunLight.shadow.mapSize.height = 512;
+    sunLight.shadow.camera.left = -150;
+    sunLight.shadow.camera.right = 150;
+    sunLight.shadow.camera.top = 150;
+    sunLight.shadow.camera.bottom = -150;
     scene.add(sunLight);
 
     // --- Ground ---
@@ -113,7 +117,9 @@ export default function Game() {
     carRef.current = car;
 
     // --- Environment (Buildings) ---
+    generateCityData();
     createCity(scene);
+    setIsLoaded(true);
 
     // --- Resize Handler ---
     const handleResize = () => {
@@ -263,79 +269,77 @@ export default function Game() {
     return group;
   }
 
-  function createCity(scene: THREE.Scene) {
-    const buildingGeom = new THREE.BoxGeometry(1, 1, 1);
-    for (let i = 0; i < 300; i++) {
+  function generateCityData() {
+    if (buildingsDataRef.current.length > 0) return;
+    
+    for (let i = 0; i < 400; i++) {
       const h = 15 + Math.random() * 60;
       const w = 8 + Math.random() * 12;
       const d = 8 + Math.random() * 12;
       
-      const hue = Math.random() * 0.1 + 0.6; // Blueish/Greyish
-      const mat = new THREE.MeshStandardMaterial({ 
-        color: new THREE.Color().setHSL(hue, 0.1, 0.15),
-        roughness: 0.5,
-        metalness: 0.5
+      const hue = Math.random() * 0.1 + 0.6;
+      const color = new THREE.Color().setHSL(hue, 0.1, 0.15);
+      
+      let x = (Math.random() - 0.5) * 800;
+      let z = (Math.random() - 0.5) * 800;
+      
+      if (Math.abs(x) < 20 || Math.abs(z) < 20) {
+        x += 40;
+      }
+      
+      buildingsDataRef.current.push({
+        pos: new THREE.Vector3(x, h / 2, z),
+        scale: new THREE.Vector3(w, h, d),
+        color: color
       });
-      
-      const building = new THREE.Mesh(buildingGeom, mat);
-      building.scale.set(w, h, d);
-      building.position.set(
-        (Math.random() - 0.5) * 600,
-        h / 2,
-        (Math.random() - 0.5) * 600
-      );
-      
-      if (Math.abs(building.position.x) < 20 || Math.abs(building.position.z) < 20) {
-        building.position.x += 40;
-      }
-      
-      building.castShadow = true;
-      building.receiveShadow = true;
-      scene.add(building);
-      buildingsRef.current.push(building);
+    }
+  }
 
-      // Add windows (emissive dots)
-      if (Math.random() > 0.3) {
-        const windowGeom = new THREE.PlaneGeometry(0.5, 0.5);
-        const windowMat = new THREE.MeshBasicMaterial({ color: 0xffffaa });
-        for (let j = 0; j < 10; j++) {
-          const win = new THREE.Mesh(windowGeom, windowMat);
-          win.position.set(
-            (Math.random() - 0.5) * w,
-            Math.random() * h,
-            d / 2 + 0.01
-          );
-          building.add(win);
-        }
+  function createCity(scene: THREE.Scene) {
+    const buildingGeom = new THREE.BoxGeometry(1, 1, 1);
+    const buildingMat = new THREE.MeshStandardMaterial({ 
+      roughness: 0.6,
+      metalness: 0.4
+    });
+    
+    const count = buildingsDataRef.current.length;
+    const instancedMesh = new THREE.InstancedMesh(buildingGeom, buildingMat, count);
+    instancedMesh.castShadow = true;
+    instancedMesh.receiveShadow = true;
+    
+    const matrix = new THREE.Matrix4();
+    buildingsDataRef.current.forEach((data, i) => {
+      matrix.makeScale(data.scale.x, data.scale.y, data.scale.z);
+      matrix.setPosition(data.pos);
+      instancedMesh.setMatrixAt(i, matrix);
+      instancedMesh.setColorAt(i, data.color);
+    });
+    
+    scene.add(instancedMesh);
+    buildingsMeshRef.current = instancedMesh;
+
+    // Street Lamps - Optimized (Fewer lights)
+    const lampGeom = new THREE.CylinderGeometry(0.1, 0.1, 8);
+    const lampMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
+    const lampCount = 30;
+    const lampInstanced = new THREE.InstancedMesh(lampGeom, lampMat, lampCount);
+    
+    for (let i = 0; i < lampCount; i++) {
+      const x = (Math.random() - 0.5) * 600;
+      const z = (Math.random() - 0.5) * 600;
+      const safeX = Math.abs(x) < 10 ? x + 15 : x;
+      
+      matrix.makeTranslation(safeX, 4, z);
+      lampInstanced.setMatrixAt(i, matrix);
+      
+      // Only add point lights for the first 8 lamps to save performance
+      if (i < 8) {
+        const lampLight = new THREE.PointLight(0xffccaa, 15, 40);
+        lampLight.position.set(safeX, 8, z);
+        scene.add(lampLight);
       }
     }
-
-    // Street Lamps
-    for (let i = 0; i < 50; i++) {
-      const lampGroup = new THREE.Group();
-      const poleGeom = new THREE.CylinderGeometry(0.1, 0.1, 8);
-      const pole = new THREE.Mesh(poleGeom, new THREE.MeshStandardMaterial({ color: 0x333333 }));
-      pole.position.y = 4;
-      lampGroup.add(pole);
-
-      const bulbGeom = new THREE.SphereGeometry(0.3);
-      const bulbMat = new THREE.MeshBasicMaterial({ color: 0xffccaa });
-      const bulb = new THREE.Mesh(bulbGeom, bulbMat);
-      bulb.position.set(0, 8, 1);
-      lampGroup.add(bulb);
-
-      const lampLight = new THREE.PointLight(0xffccaa, 10, 30);
-      lampLight.position.set(0, 8, 1);
-      lampGroup.add(lampLight);
-
-      lampGroup.position.set(
-        (Math.random() - 0.5) * 500,
-        0,
-        (Math.random() - 0.5) * 500
-      );
-      if (Math.abs(lampGroup.position.x) < 10) lampGroup.position.x += 15;
-      scene.add(lampGroup);
-    }
+    scene.add(lampInstanced);
   }
 
   function updateCar(delta: number) {
@@ -402,14 +406,11 @@ export default function Game() {
     if (!carRef.current) return;
     const carPos = carRef.current.position;
     
-    for (const building of buildingsRef.current) {
-      const bPos = building.position;
-      const bScale = building.scale;
+    for (const data of buildingsDataRef.current) {
+      const dx = Math.abs(carPos.x - data.pos.x);
+      const dz = Math.abs(carPos.z - data.pos.z);
       
-      const dx = Math.abs(carPos.x - bPos.x);
-      const dz = Math.abs(carPos.z - bPos.z);
-      
-      if (dx < bScale.x / 2 + 1 && dz < bScale.z / 2 + 1) {
+      if (dx < data.scale.x / 2 + 1 && dz < data.scale.z / 2 + 1) {
         gameOver();
         break;
       }
@@ -469,6 +470,27 @@ export default function Game() {
           <p className="text-2xl font-black tabular-nums tracking-tighter">{gameState.highScore}</p>
         </div>
       </div>
+
+      {/* Loading Screen */}
+      <AnimatePresence>
+        {!isLoaded && (
+          <motion.div
+            initial={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-black"
+          >
+            <div className="w-64 h-1 bg-white/10 rounded-full overflow-hidden mb-4">
+              <motion.div
+                initial={{ width: 0 }}
+                animate={{ width: "100%" }}
+                transition={{ duration: 2 }}
+                className="h-full bg-cyan-400"
+              />
+            </div>
+            <p className="text-[10px] uppercase tracking-[0.5em] text-white/40 font-bold">Initializing City Assets</p>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Start Screen */}
       <AnimatePresence>
