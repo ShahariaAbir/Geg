@@ -5,11 +5,11 @@ import { Trophy, Play, RotateCcw, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Gau
 import Peer, { DataConnection } from 'peerjs';
 
 // --- Constants ---
-const CAR_ACCELERATION = 0.5;
-const CAR_BRAKE = 0.8;
-const CAR_FRICTION = 0.98;
+const CAR_ACCELERATION = 0.6;
+const CAR_BRAKE = 1.2;
+const CAR_FRICTION = 0.992;
 const CAR_STEER_SPEED = 0.04;
-const CAR_MAX_SPEED = 1.5;
+const CAR_MAX_SPEED = 1.8;
 
 interface GameState {
   score: number;
@@ -803,7 +803,8 @@ export default function Game() {
     if (acceleration !== 0) {
       speed += acceleration * delta;
     } else {
-      speed *= CAR_FRICTION;
+      // Frame-rate independent friction for smoother coasting
+      speed *= Math.pow(CAR_FRICTION, delta * 60);
       if (Math.abs(speed) < 0.005) speed = 0;
     }
 
