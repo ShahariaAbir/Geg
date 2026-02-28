@@ -7,7 +7,7 @@ import Peer, { DataConnection } from 'peerjs';
 // --- Constants ---
 const CAR_ACCELERATION = 0.3;
 const CAR_BRAKE = 8.6;
-const CAR_FRICTION = 0.55;
+const CAR_COAST_DRAG = 0.45;
 const CAR_STEER_SPEED = 0.04;
 const CAR_MAX_SPEED = 1.5;
 
@@ -165,25 +165,11 @@ export default function Game() {
       const y = posAttr.getY(i);
       
       let h = 0;
-      const dist = Math.sqrt(x * x + y * y);
       
       // River Bed (South-East)
       const riverX = 1500;
       if (Math.abs(x - riverX) < 100) {
         h = -15 + Math.cos((x - riverX) * 0.03) * 5;
-      } else {
-        // Hills outside city
-        if (dist > 800) {
-          h = Math.sin(x * 0.01) * Math.cos(y * 0.01) * 60 * ((dist - 800) / 1000);
-        }
-        
-        // Mountain (North-West)
-        if (x < -1200 && y < -1200) {
-          const mDist = Math.sqrt((x + 2000) ** 2 + (y + 2000) ** 2);
-          if (mDist < 800) {
-            h += (800 - mDist) * 0.5;
-          }
-        }
       }
       
       posAttr.setZ(i, h);
@@ -382,19 +368,6 @@ export default function Game() {
       vLine.position.set(i * 200, 0.03, 0);
       scene.add(vLine);
     }
-
-    // Mountain Road
-    const mountainRoad = new THREE.Mesh(new THREE.BoxGeometry(20, 2, 1000), roadMat);
-    mountainRoad.position.set(-1800, 200, -1800);
-    mountainRoad.rotation.y = Math.PI / 4;
-    scene.add(mountainRoad);
-    
-    // Ramp to mountain road (simplified)
-    const ramp = new THREE.Mesh(new THREE.BoxGeometry(20, 2, 500), roadMat);
-    ramp.position.set(-1400, 100, -1400);
-    ramp.rotation.y = Math.PI / 4;
-    ramp.rotation.x = Math.PI / 12;
-    scene.add(ramp);
 
     // Amoeba racing circuit around downtown
     const outerPoints: THREE.Vector2[] = [];
@@ -845,8 +818,14 @@ export default function Game() {
     if (acceleration !== 0) {
       speed += acceleration * delta;
     } else {
-      speed *= CAR_FRICTION;
-      if (Math.abs(speed) < 0.005) speed = 0;
+      const drag = CAR_COAST_DRAG * delta;
+      speed = THREE.MathUtils.damp(speed, 0, 4, delta);
+      if (speed > 0) {
+        speed = Math.max(0, speed - drag);
+      } else if (speed < 0) {
+        speed = Math.min(0, speed + drag);
+      }
+      if (Math.abs(speed) < 0.003) speed = 0;
     }
 
     // Steering
