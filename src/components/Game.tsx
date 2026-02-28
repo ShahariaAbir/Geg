@@ -31,6 +31,7 @@ interface GameState {
 export default function Game() {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapCanvasRef = useRef<HTMLCanvasElement>(null);
+  const expandedMapCanvasRef = useRef<HTMLCanvasElement>(null);
   const [gameState, setGameState] = useState<GameState>({
     score: 0,
     isGameOver: false,
@@ -48,6 +49,7 @@ export default function Game() {
     isPortrait: false,
   });
   const [currentZone, setCurrentZone] = useState('Downtown');
+  const [isMapExpanded, setIsMapExpanded] = useState(false);
 
   // Refs for game logic state
   const gameRunningRef = useRef({
@@ -187,7 +189,7 @@ export default function Game() {
       posAttr.setZ(i, h);
     }
     terrainGeom.computeVertexNormals();
-    const terrainMat = new THREE.MeshLambertMaterial({ color: 0x3d7a37 });
+    const terrainMat = new THREE.MeshLambertMaterial({ color: 0x88d74a });
     const terrain = new THREE.Mesh(terrainGeom, terrainMat);
     terrain.rotation.x = -Math.PI / 2;
     scene.add(terrain);
@@ -393,6 +395,39 @@ export default function Game() {
     ramp.rotation.y = Math.PI / 4;
     ramp.rotation.x = Math.PI / 12;
     scene.add(ramp);
+
+    // Amoeba racing circuit around downtown
+    const outerPoints: THREE.Vector2[] = [];
+    const innerPoints: THREE.Vector2[] = [];
+    const baseRadius = 900;
+    const width = 45;
+    const segments = 96;
+
+    for (let i = 0; i < segments; i++) {
+      const t = (i / segments) * Math.PI * 2;
+      const wobble = 150 * Math.sin(t * 2.3) + 90 * Math.cos(t * 3.1);
+      const radius = baseRadius + wobble;
+      const x = Math.cos(t) * radius;
+      const z = Math.sin(t) * radius;
+      outerPoints.push(new THREE.Vector2(x, z));
+
+      const innerRadius = radius - width;
+      innerPoints.unshift(new THREE.Vector2(Math.cos(t) * innerRadius, Math.sin(t) * innerRadius));
+    }
+
+    const circuitShape = new THREE.Shape(outerPoints);
+    circuitShape.holes.push(new THREE.Path(innerPoints));
+    const circuitGeom = new THREE.ShapeGeometry(circuitShape);
+    const circuit = new THREE.Mesh(circuitGeom, roadMat);
+    circuit.rotation.x = -Math.PI / 2;
+    circuit.position.y = 0.021;
+    scene.add(circuit);
+
+    const circuitLine = new THREE.LineLoop(
+      new THREE.BufferGeometry().setFromPoints(outerPoints.map((p) => new THREE.Vector3(p.x, 0.04, p.y))),
+      lineMat,
+    );
+    scene.add(circuitLine);
   }
 
   function createCar() {
@@ -401,8 +436,8 @@ export default function Game() {
     group.add(carBody);
 
     // Body
-    const bodyGeom = new THREE.BoxGeometry(2, 0.6, 4.5);
-    const bodyMat = new THREE.MeshStandardMaterial({ color: 0xcc0000, metalness: 0.8, roughness: 0.2 });
+    const bodyGeom = new THREE.BoxGeometry(2.1, 0.6, 4.7);
+    const bodyMat = new THREE.MeshStandardMaterial({ color: 0xdd2222, metalness: 0.85, roughness: 0.18 });
     const body = new THREE.Mesh(bodyGeom, bodyMat);
     body.position.y = 0.6;
     body.castShadow = true;
@@ -414,6 +449,17 @@ export default function Game() {
     const cabin = new THREE.Mesh(cabinGeom, cabinMat);
     cabin.position.set(0, 1.2, -0.1);
     carBody.add(cabin);
+
+    const hoodGeom = new THREE.BoxGeometry(1.8, 0.25, 1.4);
+    const hood = new THREE.Mesh(hoodGeom, bodyMat);
+    hood.position.set(0, 0.9, 1.4);
+    hood.rotation.x = -0.1;
+    carBody.add(hood);
+
+    const spoilerGeom = new THREE.BoxGeometry(1.5, 0.12, 0.5);
+    const spoiler = new THREE.Mesh(spoilerGeom, new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.7, roughness: 0.25 }));
+    spoiler.position.set(0, 1.35, -2.1);
+    carBody.add(spoiler);
 
     // Side Mirrors
     const mirrorGeom = new THREE.BoxGeometry(0.4, 0.2, 0.2);
@@ -436,9 +482,9 @@ export default function Game() {
     carBody.add(exhaustR);
 
     // Wheels
-    const wheelGeom = new THREE.CylinderGeometry(0.45, 0.45, 0.4, 24);
+    const wheelGeom = new THREE.CylinderGeometry(0.5, 0.5, 0.45, 24);
     const wheelMat = new THREE.MeshStandardMaterial({ color: 0x111111 });
-    const wheelPositions = [[-1.1, 0.45, 1.4], [1.1, 0.45, 1.4], [-1.1, 0.45, -1.4], [1.1, 0.45, -1.4]];
+    const wheelPositions = [[-1.15, 0.48, 1.45], [1.15, 0.48, 1.45], [-1.15, 0.48, -1.45], [1.15, 0.48, -1.45]];
 
     wheelPositions.forEach(pos => {
       const wheel = new THREE.Mesh(wheelGeom, wheelMat);
@@ -465,6 +511,11 @@ export default function Game() {
     const tailR = tailL.clone();
     tailR.position.x = 0.65;
     carBody.add(tailR);
+
+    const trimGeom = new THREE.BoxGeometry(2.25, 0.15, 4.6);
+    const trim = new THREE.Mesh(trimGeom, new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.6, roughness: 0.4 }));
+    trim.position.set(0, 0.45, 0);
+    carBody.add(trim);
 
     return group;
   }
@@ -915,57 +966,107 @@ export default function Game() {
     }
   }
 
-  function updateMiniMap() {
-    if (!mapCanvasRef.current || !carRef.current) return;
-    const ctx = mapCanvasRef.current.getContext('2d');
+  function drawMiniMap(canvas: HTMLCanvasElement | null, expanded = false) {
+    if (!canvas || !carRef.current) return;
+    const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const size = 150;
+    const size = canvas.width;
+    const center = size / 2;
+    const rotation = gameRunningRef.current.rotation;
+
     ctx.clearRect(0, 0, size, size);
-    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(center, center, center - 2, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.fillStyle = expanded ? 'rgba(10,18,25,0.95)' : 'rgba(0,0,0,0.55)';
     ctx.fillRect(0, 0, size, size);
+
+    if (!expanded) {
+      ctx.translate(center, center);
+      ctx.rotate(-rotation);
+      ctx.translate(-center, -center);
+    }
 
     const carX = carRef.current.position.x;
     const carZ = carRef.current.position.z;
-    const scale = 0.1;
+    const scale = expanded ? 0.06 : 0.1;
+    const originX = expanded ? 0 : carX;
+    const originZ = expanded ? 0 : carZ;
 
     // Draw Roads
     ctx.strokeStyle = '#444';
-    ctx.lineWidth = 2;
-    for (let i = -10; i <= 10; i++) {
-      const rx = (i * 200 - carX) * scale + size / 2;
-      const rz = (i * 200 - carZ) * scale + size / 2;
+    ctx.lineWidth = expanded ? 1.8 : 2;
+    for (let i = -14; i <= 14; i++) {
+      const rx = (i * 200 - originX) * scale + center;
+      const rz = (i * 200 - originZ) * scale + center;
       ctx.beginPath(); ctx.moveTo(rx, 0); ctx.lineTo(rx, size); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(0, rz); ctx.lineTo(size, rz); ctx.stroke();
     }
 
     // Draw Buildings
     buildingsDataRef.current.forEach(b => {
-      const bx = (b.pos.x - carX) * scale + size / 2;
-      const bz = (b.pos.z - carZ) * scale + size / 2;
+      const bx = (b.pos.x - originX) * scale + center;
+      const bz = (b.pos.z - originZ) * scale + center;
       if (bx > 0 && bx < size && bz > 0 && bz < size) {
         ctx.fillStyle = b.type === 3 ? '#555' : '#888';
-        ctx.fillRect(bx - 2, bz - 2, 4, 4);
+        const blockSize = expanded ? 2 : 4;
+        ctx.fillRect(bx - blockSize / 2, bz - blockSize / 2, blockSize, blockSize);
       }
     });
 
     // Draw Remote Players
     Object.values(remotePlayersRef.current).forEach((remote: any) => {
-      const rx = (remote.mesh.position.x - carX) * scale + size / 2;
-      const rz = (remote.mesh.position.z - carZ) * scale + size / 2;
+      const rx = (remote.mesh.position.x - originX) * scale + center;
+      const rz = (remote.mesh.position.z - originZ) * scale + center;
       if (rx > 0 && rx < size && rz > 0 && rz < size) {
         ctx.fillStyle = '#00aaff';
         ctx.beginPath();
-        ctx.arc(rx, rz, 3, 0, Math.PI * 2);
+        ctx.arc(rx, rz, expanded ? 3 : 2.5, 0, Math.PI * 2);
         ctx.fill();
       }
     });
 
-    // Draw Car
+    // Draw Car with heading
     ctx.fillStyle = '#ff0000';
     ctx.beginPath();
-    ctx.arc(size / 2, size / 2, 3, 0, Math.PI * 2);
+    if (expanded) {
+      const cx = (carX - originX) * scale + center;
+      const cz = (carZ - originZ) * scale + center;
+      ctx.arc(cx, cz, 4, 0, Math.PI * 2);
+    } else {
+      ctx.arc(center, center, 3.5, 0, Math.PI * 2);
+    }
     ctx.fill();
+
+    ctx.restore();
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(center, center, center - 2, 0, Math.PI * 2);
+    ctx.stroke();
+
+    if (!expanded) {
+      ctx.save();
+      ctx.translate(center, center);
+      ctx.fillStyle = '#00e5ff';
+      ctx.beginPath();
+      ctx.moveTo(0, -16);
+      ctx.lineTo(-4, -8);
+      ctx.lineTo(4, -8);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  function updateMiniMap() {
+    drawMiniMap(mapCanvasRef.current, false);
+    if (isMapExpanded) {
+      drawMiniMap(expandedMapCanvasRef.current, true);
+    }
   }
 
   function checkCollisions() {
@@ -1118,10 +1219,13 @@ export default function Game() {
         
         <div className={`flex flex-col items-end ${isLandscapeMobile ? 'gap-2 max-w-[48%]' : 'gap-3 md:gap-4'}`}>
           {/* Mini Map - Top Right for Mobile */}
-          <div className={`bg-black/60 backdrop-blur-xl border border-white/10 overflow-hidden shadow-2xl pointer-events-auto ${isLandscapeMobile ? 'p-1 rounded-xl' : 'p-1.5 rounded-2xl'}`}>
-            <canvas ref={mapCanvasRef} width={120} height={120} className={`rounded-xl opacity-80 ${isLandscapeMobile ? 'w-[88px] h-[88px]' : 'md:w-[150px] md:h-[150px]'}`} />
+          <button
+            onClick={() => setIsMapExpanded(true)}
+            className={`bg-black/60 backdrop-blur-xl border border-white/10 overflow-hidden shadow-2xl pointer-events-auto ${isLandscapeMobile ? 'p-1 rounded-full' : 'p-1.5 rounded-full'} transition hover:scale-105`}
+          >
+            <canvas ref={mapCanvasRef} width={160} height={160} className={`rounded-full opacity-90 ${isLandscapeMobile ? 'w-[92px] h-[92px]' : 'md:w-[150px] md:h-[150px]'}`} />
             <p className="text-[7px] md:text-[8px] uppercase tracking-[0.3em] text-center mt-1.5 text-white/40 font-bold">Navigation</p>
-          </div>
+          </button>
 
           <div className={`bg-black/60 backdrop-blur-xl border border-white/10 text-right shadow-2xl ${isLandscapeMobile ? 'p-2.5 rounded-2xl' : 'p-4 md:p-6 rounded-3xl'}`}>
             <p className="text-[8px] md:text-[10px] uppercase tracking-[0.2em] text-white/40 font-bold mb-1 flex items-center justify-end gap-2">
@@ -1135,10 +1239,10 @@ export default function Game() {
 
       {/* Mobile Controls */}
       {gameState.isStarted && !gameState.isGameOver && (
-        <div className={`absolute inset-0 pointer-events-none z-20 flex flex-col justify-end ${isLandscapeMobile ? 'p-3' : 'p-10'}`}>
-          <div className={`flex justify-between items-end w-full mx-auto ${isLandscapeMobile ? 'max-w-none' : 'max-w-5xl'}`}>
+        <div className={`absolute inset-0 pointer-events-none z-20 flex flex-col justify-end ${isLandscapeMobile ? 'p-3 pb-6' : 'p-10 pb-14'}`}>
+          <div className={`flex justify-between items-start w-full mx-auto ${isLandscapeMobile ? 'max-w-none' : 'max-w-5xl'}`}>
             {/* Steering */}
-            <div className={`flex pointer-events-auto ${isLandscapeMobile ? 'gap-3' : 'gap-6'}`}>
+            <div className={`flex pointer-events-auto ${isLandscapeMobile ? 'gap-3 -translate-y-4' : 'gap-6 -translate-y-6'}`}>
               <button
                 onTouchStart={(e) => { e.preventDefault(); keysRef.current['ArrowLeft'] = true; }}
                 onTouchEnd={(e) => { e.preventDefault(); keysRef.current['ArrowLeft'] = false; }}
@@ -1358,6 +1462,34 @@ export default function Game() {
 
       {/* Vignette Effect */}
       <div className="absolute inset-0 pointer-events-none shadow-[inset_0_0_150px_rgba(0,0,0,0.8)] z-0" />
+
+      <AnimatePresence>
+        {isMapExpanded && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 z-40 bg-black/80 backdrop-blur-md flex items-center justify-center p-6"
+            onClick={() => setIsMapExpanded(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="relative bg-black/70 border border-white/10 rounded-3xl p-5"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <canvas ref={expandedMapCanvasRef} width={520} height={520} className="w-[78vw] max-w-[540px] aspect-square rounded-full border border-white/10" />
+              <button
+                onClick={() => setIsMapExpanded(false)}
+                className="absolute top-3 right-3 bg-white text-black px-3 py-1 rounded-full text-xs font-black uppercase"
+              >
+                Close
+              </button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
