@@ -7,7 +7,7 @@ import Peer, { DataConnection } from 'peerjs';
 // --- Constants ---
 const CAR_ACCELERATION = 0.3;
 const CAR_BRAKE = 8.6;
-const CAR_COAST_DRAG = 0.45;
+const CAR_COAST_DRAG = 0.3;
 const CAR_STEER_SPEED = 0.04;
 const CAR_MAX_SPEED = 1.5;
 
