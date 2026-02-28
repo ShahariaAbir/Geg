@@ -5,9 +5,9 @@ import { Trophy, Play, RotateCcw, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Gau
 import Peer, { DataConnection } from 'peerjs';
 
 // --- Constants ---
-const CAR_ACCELERATION = 0.3;
-const CAR_BRAKE = 8.6;
-const CAR_COAST_DRAG = 0.1;
+const CAR_ACCELERATION = 0.5;
+const CAR_BRAKE = 0.8;
+const CAR_FRICTION = 0.98;
 const CAR_STEER_SPEED = 0.04;
 const CAR_MAX_SPEED = 1.5;
 
@@ -26,12 +26,12 @@ interface GameState {
     status: 'idle' | 'connecting' | 'connected' | 'error';
   };
   isPortrait: boolean;
+  isMapFullscreen: boolean;
 }
 
 export default function Game() {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapCanvasRef = useRef<HTMLCanvasElement>(null);
-  const expandedMapCanvasRef = useRef<HTMLCanvasElement>(null);
   const [gameState, setGameState] = useState<GameState>({
     score: 0,
     isGameOver: false,
@@ -47,9 +47,9 @@ export default function Game() {
       status: 'idle',
     },
     isPortrait: false,
+    isMapFullscreen: false,
   });
   const [currentZone, setCurrentZone] = useState('Downtown');
-  const [isMapExpanded, setIsMapExpanded] = useState(false);
 
   // Refs for game logic state
   const gameRunningRef = useRef({
@@ -67,6 +67,8 @@ export default function Game() {
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const carRef = useRef<THREE.Group | null>(null);
+  const raycasterRef = useRef(new THREE.Raycaster());
+  const groundObjectsRef = useRef<THREE.Object3D[]>([]);
   const buildingsDataRef = useRef<{ pos: THREE.Vector3, scale: THREE.Vector3, color: THREE.Color, type: number }[]>([]);
   const treesDataRef = useRef<{ pos: THREE.Vector3, scale: number }[]>([]);
   const buildingsMeshRef = useRef<THREE.InstancedMesh | null>(null);
@@ -93,7 +95,6 @@ export default function Game() {
   // Input state
   const keysRef = useRef<{ [key: string]: boolean }>({});
   const isMobileRef = useRef(false);
-  const isLandscapeMobile = isMobileRef.current && !gameState.isPortrait;
 
   useEffect(() => {
     isMobileRef.current = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
@@ -165,20 +166,35 @@ export default function Game() {
       const y = posAttr.getY(i);
       
       let h = 0;
+      const dist = Math.sqrt(x * x + y * y);
       
       // River Bed (South-East)
       const riverX = 1500;
       if (Math.abs(x - riverX) < 100) {
         h = -15 + Math.cos((x - riverX) * 0.03) * 5;
+      } else {
+        // Hills outside city
+        if (dist > 800) {
+          h = Math.sin(x * 0.01) * Math.cos(y * 0.01) * 60 * ((dist - 800) / 1000);
+        }
+        
+        // Mountain (North-West)
+        if (x < -1200 && y < -1200) {
+          const mDist = Math.sqrt((x + 2000) ** 2 + (y + 2000) ** 2);
+          if (mDist < 800) {
+            h += (800 - mDist) * 0.5;
+          }
+        }
       }
       
       posAttr.setZ(i, h);
     }
     terrainGeom.computeVertexNormals();
-    const terrainMat = new THREE.MeshLambertMaterial({ color: 0x88d74a });
+    const terrainMat = new THREE.MeshLambertMaterial({ color: 0x3d7a37 });
     const terrain = new THREE.Mesh(terrainGeom, terrainMat);
     terrain.rotation.x = -Math.PI / 2;
     scene.add(terrain);
+    groundObjectsRef.current.push(terrain);
 
     // --- Water (River) ---
     const waterGeom = new THREE.PlaneGeometry(200, 5000);
@@ -193,6 +209,7 @@ export default function Game() {
     const bridgeDeck = new THREE.Mesh(new THREE.BoxGeometry(200, 2, 40), new THREE.MeshLambertMaterial({ color: 0x555555 }));
     bridgeDeck.position.set(1500, 2, 0);
     bridgeGroup.add(bridgeDeck);
+    groundObjectsRef.current.push(bridgeDeck);
     
     // Bridge Pillars
     const pillarGeom = new THREE.CylinderGeometry(2, 2, 20);
@@ -349,6 +366,7 @@ export default function Game() {
         hRoad.rotation.x = -Math.PI / 2;
         hRoad.position.set(0, 0.02, i * 200);
         scene.add(hRoad);
+        groundObjectsRef.current.push(hRoad);
       }
       
       // Vertical
@@ -356,6 +374,7 @@ export default function Game() {
       vRoad.rotation.x = -Math.PI / 2;
       vRoad.position.set(i * 200, 0.02, 0);
       scene.add(vRoad);
+      groundObjectsRef.current.push(vRoad);
 
       // Road Lines
       const hLine = new THREE.Mesh(new THREE.PlaneGeometry(4000, 0.5), lineMat);
@@ -369,38 +388,20 @@ export default function Game() {
       scene.add(vLine);
     }
 
-    // Amoeba racing circuit around downtown
-    const outerPoints: THREE.Vector2[] = [];
-    const innerPoints: THREE.Vector2[] = [];
-    const baseRadius = 900;
-    const width = 45;
-    const segments = 96;
-
-    for (let i = 0; i < segments; i++) {
-      const t = (i / segments) * Math.PI * 2;
-      const wobble = 150 * Math.sin(t * 2.3) + 90 * Math.cos(t * 3.1);
-      const radius = baseRadius + wobble;
-      const x = Math.cos(t) * radius;
-      const z = Math.sin(t) * radius;
-      outerPoints.push(new THREE.Vector2(x, z));
-
-      const innerRadius = radius - width;
-      innerPoints.unshift(new THREE.Vector2(Math.cos(t) * innerRadius, Math.sin(t) * innerRadius));
-    }
-
-    const circuitShape = new THREE.Shape(outerPoints);
-    circuitShape.holes.push(new THREE.Path(innerPoints));
-    const circuitGeom = new THREE.ShapeGeometry(circuitShape);
-    const circuit = new THREE.Mesh(circuitGeom, roadMat);
-    circuit.rotation.x = -Math.PI / 2;
-    circuit.position.y = 0.021;
-    scene.add(circuit);
-
-    const circuitLine = new THREE.LineLoop(
-      new THREE.BufferGeometry().setFromPoints(outerPoints.map((p) => new THREE.Vector3(p.x, 0.04, p.y))),
-      lineMat,
-    );
-    scene.add(circuitLine);
+    // Mountain Road
+    const mountainRoad = new THREE.Mesh(new THREE.BoxGeometry(20, 2, 1000), roadMat);
+    mountainRoad.position.set(-1800, 300, -1800);
+    mountainRoad.rotation.y = Math.PI / 4;
+    scene.add(mountainRoad);
+    groundObjectsRef.current.push(mountainRoad);
+    
+    // Ramp to mountain road (simplified)
+    const ramp = new THREE.Mesh(new THREE.BoxGeometry(20, 2, 800), roadMat);
+    ramp.position.set(-1400, 150, -1400);
+    ramp.rotation.y = Math.PI / 4;
+    ramp.rotation.x = Math.PI / 10;
+    scene.add(ramp);
+    groundObjectsRef.current.push(ramp);
   }
 
   function createCar() {
@@ -409,8 +410,8 @@ export default function Game() {
     group.add(carBody);
 
     // Body
-    const bodyGeom = new THREE.BoxGeometry(2.1, 0.6, 4.7);
-    const bodyMat = new THREE.MeshStandardMaterial({ color: 0xdd2222, metalness: 0.85, roughness: 0.18 });
+    const bodyGeom = new THREE.BoxGeometry(2, 0.6, 4.5);
+    const bodyMat = new THREE.MeshStandardMaterial({ color: 0xcc0000, metalness: 0.8, roughness: 0.2 });
     const body = new THREE.Mesh(bodyGeom, bodyMat);
     body.position.y = 0.6;
     body.castShadow = true;
@@ -422,17 +423,6 @@ export default function Game() {
     const cabin = new THREE.Mesh(cabinGeom, cabinMat);
     cabin.position.set(0, 1.2, -0.1);
     carBody.add(cabin);
-
-    const hoodGeom = new THREE.BoxGeometry(1.8, 0.25, 1.4);
-    const hood = new THREE.Mesh(hoodGeom, bodyMat);
-    hood.position.set(0, 0.9, 1.4);
-    hood.rotation.x = -0.1;
-    carBody.add(hood);
-
-    const spoilerGeom = new THREE.BoxGeometry(1.5, 0.12, 0.5);
-    const spoiler = new THREE.Mesh(spoilerGeom, new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.7, roughness: 0.25 }));
-    spoiler.position.set(0, 1.35, -2.1);
-    carBody.add(spoiler);
 
     // Side Mirrors
     const mirrorGeom = new THREE.BoxGeometry(0.4, 0.2, 0.2);
@@ -455,9 +445,9 @@ export default function Game() {
     carBody.add(exhaustR);
 
     // Wheels
-    const wheelGeom = new THREE.CylinderGeometry(0.5, 0.5, 0.45, 24);
+    const wheelGeom = new THREE.CylinderGeometry(0.45, 0.45, 0.4, 24);
     const wheelMat = new THREE.MeshStandardMaterial({ color: 0x111111 });
-    const wheelPositions = [[-1.15, 0.48, 1.45], [1.15, 0.48, 1.45], [-1.15, 0.48, -1.45], [1.15, 0.48, -1.45]];
+    const wheelPositions = [[-1.1, 0.45, 1.4], [1.1, 0.45, 1.4], [-1.1, 0.45, -1.4], [1.1, 0.45, -1.4]];
 
     wheelPositions.forEach(pos => {
       const wheel = new THREE.Mesh(wheelGeom, wheelMat);
@@ -484,11 +474,6 @@ export default function Game() {
     const tailR = tailL.clone();
     tailR.position.x = 0.65;
     carBody.add(tailR);
-
-    const trimGeom = new THREE.BoxGeometry(2.25, 0.15, 4.6);
-    const trim = new THREE.Mesh(trimGeom, new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.6, roughness: 0.4 }));
-    trim.position.set(0, 0.45, 0);
-    carBody.add(trim);
 
     return group;
   }
@@ -818,14 +803,8 @@ export default function Game() {
     if (acceleration !== 0) {
       speed += acceleration * delta;
     } else {
-      const drag = CAR_COAST_DRAG * delta;
-      speed = THREE.MathUtils.damp(speed, 0, 4, delta);
-      if (speed > 0) {
-        speed = Math.max(0, speed - drag);
-      } else if (speed < 0) {
-        speed = Math.min(0, speed + drag);
-      }
-      if (Math.abs(speed) < 0.003) speed = 0;
+      speed *= CAR_FRICTION;
+      if (Math.abs(speed) < 0.005) speed = 0;
     }
 
     // Steering
@@ -848,6 +827,17 @@ export default function Game() {
     carRef.current.position.x += Math.sin(rotation) * speed;
     carRef.current.position.z += Math.cos(rotation) * speed;
     carRef.current.rotation.y = rotation;
+
+    // Terrain Following (Height)
+    raycasterRef.current.set(
+      new THREE.Vector3(carRef.current.position.x, 1000, carRef.current.position.z),
+      new THREE.Vector3(0, -1, 0)
+    );
+    const intersects = raycasterRef.current.intersectObjects(groundObjectsRef.current);
+    if (intersects.length > 0) {
+      const targetY = intersects[0].point.y;
+      carRef.current.position.y = THREE.MathUtils.lerp(carRef.current.position.y, targetY, 0.2);
+    }
 
     // Suspension Tilt (Visual only)
     const carBody = carRef.current.children[0] as THREE.Group;
@@ -945,107 +935,57 @@ export default function Game() {
     }
   }
 
-  function drawMiniMap(canvas: HTMLCanvasElement | null, expanded = false) {
-    if (!canvas || !carRef.current) return;
-    const ctx = canvas.getContext('2d');
+  function updateMiniMap() {
+    if (!mapCanvasRef.current || !carRef.current) return;
+    const ctx = mapCanvasRef.current.getContext('2d');
     if (!ctx) return;
 
-    const size = canvas.width;
-    const center = size / 2;
-    const rotation = gameRunningRef.current.rotation;
-
+    const size = gameState.isMapFullscreen ? 600 : 150;
     ctx.clearRect(0, 0, size, size);
-    ctx.save();
-    ctx.beginPath();
-    ctx.arc(center, center, center - 2, 0, Math.PI * 2);
-    ctx.clip();
-    ctx.fillStyle = expanded ? 'rgba(10,18,25,0.95)' : 'rgba(0,0,0,0.55)';
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
     ctx.fillRect(0, 0, size, size);
-
-    if (!expanded) {
-      ctx.translate(center, center);
-      ctx.rotate(-rotation);
-      ctx.translate(-center, -center);
-    }
 
     const carX = carRef.current.position.x;
     const carZ = carRef.current.position.z;
-    const scale = expanded ? 0.06 : 0.1;
-    const originX = expanded ? 0 : carX;
-    const originZ = expanded ? 0 : carZ;
+    const scale = gameState.isMapFullscreen ? 0.05 : 0.1; // More zoom out in fullscreen
 
     // Draw Roads
     ctx.strokeStyle = '#444';
-    ctx.lineWidth = expanded ? 1.8 : 2;
-    for (let i = -14; i <= 14; i++) {
-      const rx = (i * 200 - originX) * scale + center;
-      const rz = (i * 200 - originZ) * scale + center;
+    ctx.lineWidth = 2;
+    for (let i = -10; i <= 10; i++) {
+      const rx = (i * 200 - carX) * scale + size / 2;
+      const rz = (i * 200 - carZ) * scale + size / 2;
       ctx.beginPath(); ctx.moveTo(rx, 0); ctx.lineTo(rx, size); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(0, rz); ctx.lineTo(size, rz); ctx.stroke();
     }
 
     // Draw Buildings
     buildingsDataRef.current.forEach(b => {
-      const bx = (b.pos.x - originX) * scale + center;
-      const bz = (b.pos.z - originZ) * scale + center;
+      const bx = (b.pos.x - carX) * scale + size / 2;
+      const bz = (b.pos.z - carZ) * scale + size / 2;
       if (bx > 0 && bx < size && bz > 0 && bz < size) {
         ctx.fillStyle = b.type === 3 ? '#555' : '#888';
-        const blockSize = expanded ? 2 : 4;
-        ctx.fillRect(bx - blockSize / 2, bz - blockSize / 2, blockSize, blockSize);
+        ctx.fillRect(bx - 2, bz - 2, 4, 4);
       }
     });
 
     // Draw Remote Players
     Object.values(remotePlayersRef.current).forEach((remote: any) => {
-      const rx = (remote.mesh.position.x - originX) * scale + center;
-      const rz = (remote.mesh.position.z - originZ) * scale + center;
+      const rx = (remote.mesh.position.x - carX) * scale + size / 2;
+      const rz = (remote.mesh.position.z - carZ) * scale + size / 2;
       if (rx > 0 && rx < size && rz > 0 && rz < size) {
         ctx.fillStyle = '#00aaff';
         ctx.beginPath();
-        ctx.arc(rx, rz, expanded ? 3 : 2.5, 0, Math.PI * 2);
+        ctx.arc(rx, rz, 3, 0, Math.PI * 2);
         ctx.fill();
       }
     });
 
-    // Draw Car with heading
+    // Draw Car
     ctx.fillStyle = '#ff0000';
     ctx.beginPath();
-    if (expanded) {
-      const cx = (carX - originX) * scale + center;
-      const cz = (carZ - originZ) * scale + center;
-      ctx.arc(cx, cz, 4, 0, Math.PI * 2);
-    } else {
-      ctx.arc(center, center, 3.5, 0, Math.PI * 2);
-    }
+    ctx.arc(size / 2, size / 2, 3, 0, Math.PI * 2);
     ctx.fill();
-
-    ctx.restore();
-
-    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(center, center, center - 2, 0, Math.PI * 2);
-    ctx.stroke();
-
-    if (!expanded) {
-      ctx.save();
-      ctx.translate(center, center);
-      ctx.fillStyle = '#00e5ff';
-      ctx.beginPath();
-      ctx.moveTo(0, -16);
-      ctx.lineTo(-4, -8);
-      ctx.lineTo(4, -8);
-      ctx.closePath();
-      ctx.fill();
-      ctx.restore();
-    }
-  }
-
-  function updateMiniMap() {
-    drawMiniMap(mapCanvasRef.current, false);
-    if (isMapExpanded) {
-      drawMiniMap(expandedMapCanvasRef.current, true);
-    }
   }
 
   function checkCollisions() {
@@ -1155,24 +1095,23 @@ export default function Game() {
       </AnimatePresence>
 
       {/* HUD */}
-      <div className={`absolute top-0 left-0 w-full z-10 pointer-events-none ${isLandscapeMobile ? 'p-2' : 'p-4 md:p-6'}`}>
-        <div className={`flex justify-between items-start ${isLandscapeMobile ? 'gap-2' : ''}`}>
-        <div className={`flex flex-col ${isLandscapeMobile ? 'gap-2 max-w-[48%]' : 'gap-3 md:gap-4'}`}>
-          <div className={`bg-black/60 backdrop-blur-xl border border-white/10 flex items-center shadow-2xl ${isLandscapeMobile ? 'p-2 rounded-2xl gap-2' : 'p-4 md:p-6 rounded-3xl gap-4'}`}>
-            <div className={`bg-white/10 ${isLandscapeMobile ? 'p-1.5 rounded-xl' : 'p-2 md:p-3 rounded-2xl'}`}>
+      <div className="absolute top-0 left-0 w-full p-4 md:p-6 flex justify-between items-start z-10 pointer-events-none">
+        <div className="flex flex-col gap-3 md:gap-4">
+          <div className="bg-black/60 backdrop-blur-xl p-4 md:p-6 rounded-3xl border border-white/10 flex items-center gap-4 shadow-2xl">
+            <div className="p-2 md:p-3 bg-white/10 rounded-2xl">
               <Gauge className="text-cyan-400" size={20} />
             </div>
             <div>
               <p className="text-[8px] md:text-[10px] uppercase tracking-[0.2em] text-white/40 font-bold mb-1">Velocity</p>
               <div className="flex items-baseline gap-1">
-                <p className={`${isLandscapeMobile ? 'text-xl' : 'text-2xl md:text-4xl'} font-black tabular-nums tracking-tighter`}>{gameState.speed}</p>
+                <p className="text-2xl md:text-4xl font-black tabular-nums tracking-tighter">{gameState.speed}</p>
                 <p className="text-[10px] font-bold text-cyan-400">KM/H</p>
               </div>
             </div>
           </div>
 
           {/* Camera Toggle */}
-          <div className={`bg-black/60 backdrop-blur-xl border border-white/10 flex gap-1.5 pointer-events-auto ${isLandscapeMobile ? 'p-1 rounded-xl' : 'p-1.5 rounded-2xl'}`}>
+          <div className="bg-black/60 backdrop-blur-xl p-1.5 rounded-2xl border border-white/10 flex gap-1.5 pointer-events-auto">
             {(['third', 'first', 'top'] as const).map((mode) => (
               <button
                 key={mode}
@@ -1180,7 +1119,7 @@ export default function Game() {
                   gameRunningRef.current.cameraMode = mode;
                   setGameState(prev => ({ ...prev, cameraMode: mode }));
                 }}
-                className={`${isLandscapeMobile ? 'px-2.5 py-1 text-[8px]' : 'px-3 md:px-4 py-1.5 md:py-2 text-[8px] md:text-[10px]'} rounded-xl font-bold uppercase tracking-widest transition-all ${
+                className={`px-3 md:px-4 py-1.5 md:py-2 rounded-xl text-[8px] md:text-[10px] font-bold uppercase tracking-widest transition-all ${
                   gameState.cameraMode === mode ? 'bg-cyan-400 text-black' : 'text-white/40 hover:text-white'
                 }`}
               >
@@ -1190,75 +1129,92 @@ export default function Game() {
           </div>
 
           {/* Zone Indicator */}
-          <div className={`bg-black/60 backdrop-blur-xl border border-white/10 shadow-2xl ${isLandscapeMobile ? 'px-3 py-1.5 rounded-xl' : 'px-4 md:px-6 py-2 md:py-3 rounded-2xl'}`}>
+          <div className="bg-black/60 backdrop-blur-xl px-4 md:px-6 py-2 md:py-3 rounded-2xl border border-white/10 shadow-2xl">
             <p className="text-[7px] md:text-[8px] uppercase tracking-[0.3em] text-white/40 font-bold mb-1">Current Location</p>
             <p className="text-xs md:text-sm font-black tracking-widest text-cyan-400 uppercase">{currentZone}</p>
           </div>
         </div>
         
-        <div className={`flex flex-col items-end ${isLandscapeMobile ? 'gap-2 max-w-[48%]' : 'gap-3 md:gap-4'}`}>
+        <div className="flex flex-col items-end gap-3 md:gap-4">
           {/* Mini Map - Top Right for Mobile */}
-          <button
-            onClick={() => setIsMapExpanded(true)}
-            className={`bg-black/60 backdrop-blur-xl border border-white/10 overflow-hidden shadow-2xl pointer-events-auto ${isLandscapeMobile ? 'p-1 rounded-full' : 'p-1.5 rounded-full'} transition hover:scale-105`}
+          <div 
+            className={`bg-black/60 backdrop-blur-xl p-1.5 rounded-2xl border border-white/10 overflow-hidden shadow-2xl pointer-events-auto transition-all duration-500 ${
+              gameState.isMapFullscreen ? 'fixed inset-4 md:inset-20 z-[60] flex flex-col items-center justify-center' : ''
+            }`}
           >
-            <canvas ref={mapCanvasRef} width={160} height={160} className={`rounded-full opacity-90 ${isLandscapeMobile ? 'w-[92px] h-[92px]' : 'md:w-[150px] md:h-[150px]'}`} />
-            <p className="text-[7px] md:text-[8px] uppercase tracking-[0.3em] text-center mt-1.5 text-white/40 font-bold">Navigation</p>
-          </button>
+            <div className={`relative ${gameState.isMapFullscreen ? 'w-full h-full flex flex-col items-center justify-center' : ''}`}>
+              <canvas 
+                ref={mapCanvasRef} 
+                width={gameState.isMapFullscreen ? 600 : 120} 
+                height={gameState.isMapFullscreen ? 600 : 120} 
+                className={`rounded-xl opacity-80 transition-all ${
+                  gameState.isMapFullscreen ? 'w-auto h-[80vh] aspect-square' : 'md:w-[150px] md:h-[150px]'
+                }`} 
+              />
+              <button
+                onClick={() => setGameState(prev => ({ ...prev, isMapFullscreen: !prev.isMapFullscreen }))}
+                className="absolute top-2 right-2 p-2 bg-black/40 hover:bg-cyan-400 hover:text-black rounded-lg transition-all"
+              >
+                {gameState.isMapFullscreen ? <RotateCcw size={16} /> : <Smartphone size={16} />}
+              </button>
+            </div>
+            <p className="text-[7px] md:text-[8px] uppercase tracking-[0.3em] text-center mt-1.5 text-white/40 font-bold">
+              {gameState.isMapFullscreen ? 'Full Navigation View' : 'Navigation'}
+            </p>
+          </div>
 
-          <div className={`bg-black/60 backdrop-blur-xl border border-white/10 text-right shadow-2xl ${isLandscapeMobile ? 'p-2.5 rounded-2xl' : 'p-4 md:p-6 rounded-3xl'}`}>
+          <div className="bg-black/60 backdrop-blur-xl p-4 md:p-6 rounded-3xl border border-white/10 text-right shadow-2xl">
             <p className="text-[8px] md:text-[10px] uppercase tracking-[0.2em] text-white/40 font-bold mb-1 flex items-center justify-end gap-2">
               <Trophy size={10} className="text-yellow-400" /> Record
             </p>
-            <p className={`${isLandscapeMobile ? 'text-lg' : 'text-xl md:text-2xl'} font-black tabular-nums tracking-tighter`}>{gameState.highScore}</p>
+            <p className="text-xl md:text-2xl font-black tabular-nums tracking-tighter">{gameState.highScore}</p>
           </div>
-        </div>
         </div>
       </div>
 
       {/* Mobile Controls */}
       {gameState.isStarted && !gameState.isGameOver && (
-        <div className={`absolute inset-0 pointer-events-none z-20 flex flex-col justify-end ${isLandscapeMobile ? 'p-3 pb-6' : 'p-10 pb-14'}`}>
-          <div className={`flex justify-between items-start w-full mx-auto ${isLandscapeMobile ? 'max-w-none' : 'max-w-5xl'}`}>
+        <div className="absolute inset-0 pointer-events-none z-20 flex flex-col justify-end p-10">
+          <div className="flex justify-between items-end w-full max-w-5xl mx-auto">
             {/* Steering */}
-            <div className={`flex pointer-events-auto ${isLandscapeMobile ? 'gap-3 -translate-y-4' : 'gap-6 -translate-y-6'}`}>
+            <div className="flex gap-6 pointer-events-auto">
               <button
                 onTouchStart={(e) => { e.preventDefault(); keysRef.current['ArrowLeft'] = true; }}
                 onTouchEnd={(e) => { e.preventDefault(); keysRef.current['ArrowLeft'] = false; }}
                 onPointerLeave={() => (keysRef.current['ArrowLeft'] = false)}
-                className={`${isLandscapeMobile ? 'w-16 h-16' : 'w-24 h-24'} bg-black/40 backdrop-blur-xl rounded-full border-2 border-white/20 flex items-center justify-center active:bg-cyan-500 active:scale-95 transition-all shadow-2xl touch-none`}
+                className="w-24 h-24 bg-black/40 backdrop-blur-xl rounded-full border-2 border-white/20 flex items-center justify-center active:bg-cyan-500 active:scale-95 transition-all shadow-2xl touch-none"
               >
-                <ArrowLeft size={isLandscapeMobile ? 26 : 40} className="text-white" />
+                <ArrowLeft size={40} className="text-white" />
               </button>
               <button
                 onTouchStart={(e) => { e.preventDefault(); keysRef.current['ArrowRight'] = true; }}
                 onTouchEnd={(e) => { e.preventDefault(); keysRef.current['ArrowRight'] = false; }}
                 onPointerLeave={() => (keysRef.current['ArrowRight'] = false)}
-                className={`${isLandscapeMobile ? 'w-16 h-16' : 'w-24 h-24'} bg-black/40 backdrop-blur-xl rounded-full border-2 border-white/20 flex items-center justify-center active:bg-cyan-500 active:scale-95 transition-all shadow-2xl touch-none`}
+                className="w-24 h-24 bg-black/40 backdrop-blur-xl rounded-full border-2 border-white/20 flex items-center justify-center active:bg-cyan-500 active:scale-95 transition-all shadow-2xl touch-none"
               >
-                <ArrowRight size={isLandscapeMobile ? 26 : 40} className="text-white" />
+                <ArrowRight size={40} className="text-white" />
               </button>
             </div>
 
             {/* Pedals */}
-            <div className={`flex pointer-events-auto items-end ${isLandscapeMobile ? 'gap-3' : 'gap-8'}`}>
+            <div className="flex gap-8 pointer-events-auto items-end">
               <button
                 onTouchStart={(e) => { e.preventDefault(); keysRef.current['ArrowDown'] = true; }}
                 onTouchEnd={(e) => { e.preventDefault(); keysRef.current['ArrowDown'] = false; }}
                 onPointerLeave={() => (keysRef.current['ArrowDown'] = false)}
-                className={`${isLandscapeMobile ? 'w-16 h-16 rounded-xl' : 'w-24 h-24 rounded-2xl'} bg-red-600/40 backdrop-blur-xl border-2 border-red-500/30 flex flex-col items-center justify-center active:bg-red-600 active:scale-95 transition-all shadow-2xl touch-none`}
+                className="w-24 h-24 bg-red-600/40 backdrop-blur-xl rounded-2xl border-2 border-red-500/30 flex flex-col items-center justify-center active:bg-red-600 active:scale-95 transition-all shadow-2xl touch-none"
               >
-                <ArrowDown size={isLandscapeMobile ? 22 : 32} />
-                <span className={`${isLandscapeMobile ? 'text-[8px]' : 'text-[10px] mt-1'} font-black`}>BRAKE</span>
+                <ArrowDown size={32} />
+                <span className="text-[10px] font-black mt-1">BRAKE</span>
               </button>
               <button
                 onTouchStart={(e) => { e.preventDefault(); keysRef.current['ArrowUp'] = true; }}
                 onTouchEnd={(e) => { e.preventDefault(); keysRef.current['ArrowUp'] = false; }}
                 onPointerLeave={() => (keysRef.current['ArrowUp'] = false)}
-                className={`${isLandscapeMobile ? 'w-20 h-28 rounded-2xl' : 'w-28 h-44 rounded-3xl'} bg-cyan-600/40 backdrop-blur-xl border-2 border-cyan-500/30 flex flex-col items-center justify-center active:bg-cyan-500 active:scale-95 transition-all shadow-2xl touch-none`}
+                className="w-28 h-44 bg-cyan-600/40 backdrop-blur-xl rounded-3xl border-2 border-cyan-500/30 flex flex-col items-center justify-center active:bg-cyan-500 active:scale-95 transition-all shadow-2xl touch-none"
               >
-                <ArrowUp size={isLandscapeMobile ? 28 : 48} />
-                <span className={`${isLandscapeMobile ? 'text-[10px] mt-1' : 'text-xs mt-2'} font-black`}>GAS</span>
+                <ArrowUp size={48} />
+                <span className="text-xs font-black mt-2">GAS</span>
               </button>
             </div>
           </div>
@@ -1441,34 +1397,6 @@ export default function Game() {
 
       {/* Vignette Effect */}
       <div className="absolute inset-0 pointer-events-none shadow-[inset_0_0_150px_rgba(0,0,0,0.8)] z-0" />
-
-      <AnimatePresence>
-        {isMapExpanded && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="absolute inset-0 z-40 bg-black/80 backdrop-blur-md flex items-center justify-center p-6"
-            onClick={() => setIsMapExpanded(false)}
-          >
-            <motion.div
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="relative bg-black/70 border border-white/10 rounded-3xl p-5"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <canvas ref={expandedMapCanvasRef} width={520} height={520} className="w-[78vw] max-w-[540px] aspect-square rounded-full border border-white/10" />
-              <button
-                onClick={() => setIsMapExpanded(false)}
-                className="absolute top-3 right-3 bg-white text-black px-3 py-1 rounded-full text-xs font-black uppercase"
-              >
-                Close
-              </button>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
     </div>
   );
 }
