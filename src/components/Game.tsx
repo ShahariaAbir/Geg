@@ -91,6 +91,7 @@ export default function Game() {
   // Input state
   const keysRef = useRef<{ [key: string]: boolean }>({});
   const isMobileRef = useRef(false);
+  const isLandscapeMobile = isMobileRef.current && !gameState.isPortrait;
 
   useEffect(() => {
     isMobileRef.current = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
@@ -1074,23 +1075,24 @@ export default function Game() {
       </AnimatePresence>
 
       {/* HUD */}
-      <div className="absolute top-0 left-0 w-full p-4 md:p-6 flex justify-between items-start z-10 pointer-events-none">
-        <div className="flex flex-col gap-3 md:gap-4">
-          <div className="bg-black/60 backdrop-blur-xl p-4 md:p-6 rounded-3xl border border-white/10 flex items-center gap-4 shadow-2xl">
-            <div className="p-2 md:p-3 bg-white/10 rounded-2xl">
+      <div className={`absolute top-0 left-0 w-full z-10 pointer-events-none ${isLandscapeMobile ? 'p-2' : 'p-4 md:p-6'}`}>
+        <div className={`flex justify-between items-start ${isLandscapeMobile ? 'gap-2' : ''}`}>
+        <div className={`flex flex-col ${isLandscapeMobile ? 'gap-2 max-w-[48%]' : 'gap-3 md:gap-4'}`}>
+          <div className={`bg-black/60 backdrop-blur-xl border border-white/10 flex items-center shadow-2xl ${isLandscapeMobile ? 'p-2 rounded-2xl gap-2' : 'p-4 md:p-6 rounded-3xl gap-4'}`}>
+            <div className={`bg-white/10 ${isLandscapeMobile ? 'p-1.5 rounded-xl' : 'p-2 md:p-3 rounded-2xl'}`}>
               <Gauge className="text-cyan-400" size={20} />
             </div>
             <div>
               <p className="text-[8px] md:text-[10px] uppercase tracking-[0.2em] text-white/40 font-bold mb-1">Velocity</p>
               <div className="flex items-baseline gap-1">
-                <p className="text-2xl md:text-4xl font-black tabular-nums tracking-tighter">{gameState.speed}</p>
+                <p className={`${isLandscapeMobile ? 'text-xl' : 'text-2xl md:text-4xl'} font-black tabular-nums tracking-tighter`}>{gameState.speed}</p>
                 <p className="text-[10px] font-bold text-cyan-400">KM/H</p>
               </div>
             </div>
           </div>
 
           {/* Camera Toggle */}
-          <div className="bg-black/60 backdrop-blur-xl p-1.5 rounded-2xl border border-white/10 flex gap-1.5 pointer-events-auto">
+          <div className={`bg-black/60 backdrop-blur-xl border border-white/10 flex gap-1.5 pointer-events-auto ${isLandscapeMobile ? 'p-1 rounded-xl' : 'p-1.5 rounded-2xl'}`}>
             {(['third', 'first', 'top'] as const).map((mode) => (
               <button
                 key={mode}
@@ -1098,7 +1100,7 @@ export default function Game() {
                   gameRunningRef.current.cameraMode = mode;
                   setGameState(prev => ({ ...prev, cameraMode: mode }));
                 }}
-                className={`px-3 md:px-4 py-1.5 md:py-2 rounded-xl text-[8px] md:text-[10px] font-bold uppercase tracking-widest transition-all ${
+                className={`${isLandscapeMobile ? 'px-2.5 py-1 text-[8px]' : 'px-3 md:px-4 py-1.5 md:py-2 text-[8px] md:text-[10px]'} rounded-xl font-bold uppercase tracking-widest transition-all ${
                   gameState.cameraMode === mode ? 'bg-cyan-400 text-black' : 'text-white/40 hover:text-white'
                 }`}
               >
@@ -1108,71 +1110,72 @@ export default function Game() {
           </div>
 
           {/* Zone Indicator */}
-          <div className="bg-black/60 backdrop-blur-xl px-4 md:px-6 py-2 md:py-3 rounded-2xl border border-white/10 shadow-2xl">
+          <div className={`bg-black/60 backdrop-blur-xl border border-white/10 shadow-2xl ${isLandscapeMobile ? 'px-3 py-1.5 rounded-xl' : 'px-4 md:px-6 py-2 md:py-3 rounded-2xl'}`}>
             <p className="text-[7px] md:text-[8px] uppercase tracking-[0.3em] text-white/40 font-bold mb-1">Current Location</p>
             <p className="text-xs md:text-sm font-black tracking-widest text-cyan-400 uppercase">{currentZone}</p>
           </div>
         </div>
         
-        <div className="flex flex-col items-end gap-3 md:gap-4">
+        <div className={`flex flex-col items-end ${isLandscapeMobile ? 'gap-2 max-w-[48%]' : 'gap-3 md:gap-4'}`}>
           {/* Mini Map - Top Right for Mobile */}
-          <div className="bg-black/60 backdrop-blur-xl p-1.5 rounded-2xl border border-white/10 overflow-hidden shadow-2xl pointer-events-auto">
-            <canvas ref={mapCanvasRef} width={120} height={120} className="rounded-xl opacity-80 md:w-[150px] md:h-[150px]" />
+          <div className={`bg-black/60 backdrop-blur-xl border border-white/10 overflow-hidden shadow-2xl pointer-events-auto ${isLandscapeMobile ? 'p-1 rounded-xl' : 'p-1.5 rounded-2xl'}`}>
+            <canvas ref={mapCanvasRef} width={120} height={120} className={`rounded-xl opacity-80 ${isLandscapeMobile ? 'w-[88px] h-[88px]' : 'md:w-[150px] md:h-[150px]'}`} />
             <p className="text-[7px] md:text-[8px] uppercase tracking-[0.3em] text-center mt-1.5 text-white/40 font-bold">Navigation</p>
           </div>
 
-          <div className="bg-black/60 backdrop-blur-xl p-4 md:p-6 rounded-3xl border border-white/10 text-right shadow-2xl">
+          <div className={`bg-black/60 backdrop-blur-xl border border-white/10 text-right shadow-2xl ${isLandscapeMobile ? 'p-2.5 rounded-2xl' : 'p-4 md:p-6 rounded-3xl'}`}>
             <p className="text-[8px] md:text-[10px] uppercase tracking-[0.2em] text-white/40 font-bold mb-1 flex items-center justify-end gap-2">
               <Trophy size={10} className="text-yellow-400" /> Record
             </p>
-            <p className="text-xl md:text-2xl font-black tabular-nums tracking-tighter">{gameState.highScore}</p>
+            <p className={`${isLandscapeMobile ? 'text-lg' : 'text-xl md:text-2xl'} font-black tabular-nums tracking-tighter`}>{gameState.highScore}</p>
           </div>
+        </div>
         </div>
       </div>
 
       {/* Mobile Controls */}
       {gameState.isStarted && !gameState.isGameOver && (
-        <div className="absolute inset-0 pointer-events-none z-20 flex flex-col justify-end p-10">
-          <div className="flex justify-between items-end w-full max-w-5xl mx-auto">
+        <div className={`absolute inset-0 pointer-events-none z-20 flex flex-col justify-end ${isLandscapeMobile ? 'p-3' : 'p-10'}`}>
+          <div className={`flex justify-between items-end w-full mx-auto ${isLandscapeMobile ? 'max-w-none' : 'max-w-5xl'}`}>
             {/* Steering */}
-            <div className="flex gap-6 pointer-events-auto">
+            <div className={`flex pointer-events-auto ${isLandscapeMobile ? 'gap-3' : 'gap-6'}`}>
               <button
                 onTouchStart={(e) => { e.preventDefault(); keysRef.current['ArrowLeft'] = true; }}
                 onTouchEnd={(e) => { e.preventDefault(); keysRef.current['ArrowLeft'] = false; }}
                 onPointerLeave={() => (keysRef.current['ArrowLeft'] = false)}
-                className="w-24 h-24 bg-black/40 backdrop-blur-xl rounded-full border-2 border-white/20 flex items-center justify-center active:bg-cyan-500 active:scale-95 transition-all shadow-2xl touch-none"
+                className={`${isLandscapeMobile ? 'w-16 h-16' : 'w-24 h-24'} bg-black/40 backdrop-blur-xl rounded-full border-2 border-white/20 flex items-center justify-center active:bg-cyan-500 active:scale-95 transition-all shadow-2xl touch-none`}
               >
-                <ArrowLeft size={40} className="text-white" />
+                <ArrowLeft size={isLandscapeMobile ? 26 : 40} className="text-white" />
               </button>
               <button
                 onTouchStart={(e) => { e.preventDefault(); keysRef.current['ArrowRight'] = true; }}
                 onTouchEnd={(e) => { e.preventDefault(); keysRef.current['ArrowRight'] = false; }}
                 onPointerLeave={() => (keysRef.current['ArrowRight'] = false)}
-                className="w-24 h-24 bg-black/40 backdrop-blur-xl rounded-full border-2 border-white/20 flex items-center justify-center active:bg-cyan-500 active:scale-95 transition-all shadow-2xl touch-none"
+                className={`${isLandscapeMobile ? 'w-16 h-16' : 'w-24 h-24'} bg-black/40 backdrop-blur-xl rounded-full border-2 border-white/20 flex items-center justify-center active:bg-cyan-500 active:scale-95 transition-all shadow-2xl touch-none`}
               >
-                <ArrowRight size={40} className="text-white" />
+                <ArrowRight size={isLandscapeMobile ? 26 : 40} className="text-white" />
               </button>
             </div>
 
             {/* Pedals */}
-            <div className="flex gap-8 pointer-events-auto items-end">
+            <div className={`flex pointer-events-auto items-end ${isLandscapeMobile ? 'gap-3' : 'gap-8'}`}>
               <button
                 onTouchStart={(e) => { e.preventDefault(); keysRef.current['ArrowDown'] = true; }}
                 onTouchEnd={(e) => { e.preventDefault(); keysRef.current['ArrowDown'] = false; }}
                 onPointerLeave={() => (keysRef.current['ArrowDown'] = false)}
-                className="w-24 h-24 bg-red-600/40 backdrop-blur-xl rounded-2xl border-2 border-red-500/30 flex flex-col items-center justify-center active:bg-red-600 active:scale-95 transition-all shadow-2xl touch-none"
+                className={`${isLandscapeMobile ? 'w-16 h-16 rounded-xl' : 'w-24 h-24 rounded-2xl'} bg-red-600/40 backdrop-blur-xl border-2 border-red-500/30 flex flex-col items-center justify-center active:bg-red-600 active:scale-95 transition-all shadow-2xl touch-none`}
               >
-                <ArrowDown size={32} />
-                <span className="text-[10px] font-black mt-1">BRAKE</span>
+                <ArrowDown size={isLandscapeMobile ? 22 : 32} />
+                <span className={`${isLandscapeMobile ? 'text-[8px]' : 'text-[10px] mt-1'} font-black`}>BRAKE</span>
               </button>
               <button
                 onTouchStart={(e) => { e.preventDefault(); keysRef.current['ArrowUp'] = true; }}
                 onTouchEnd={(e) => { e.preventDefault(); keysRef.current['ArrowUp'] = false; }}
                 onPointerLeave={() => (keysRef.current['ArrowUp'] = false)}
-                className="w-28 h-44 bg-cyan-600/40 backdrop-blur-xl rounded-3xl border-2 border-cyan-500/30 flex flex-col items-center justify-center active:bg-cyan-500 active:scale-95 transition-all shadow-2xl touch-none"
+                className={`${isLandscapeMobile ? 'w-20 h-28 rounded-2xl' : 'w-28 h-44 rounded-3xl'} bg-cyan-600/40 backdrop-blur-xl border-2 border-cyan-500/30 flex flex-col items-center justify-center active:bg-cyan-500 active:scale-95 transition-all shadow-2xl touch-none`}
               >
-                <ArrowUp size={48} />
-                <span className="text-xs font-black mt-2">GAS</span>
+                <ArrowUp size={isLandscapeMobile ? 28 : 48} />
+                <span className={`${isLandscapeMobile ? 'text-[10px] mt-1' : 'text-xs mt-2'} font-black`}>GAS</span>
               </button>
             </div>
           </div>
